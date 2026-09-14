@@ -62,9 +62,8 @@ func BaseURL() string {
 
 // BaseURLOverride returns the normalized ENTIRE_API_BASE_URL and true when the
 // user pointed the CLI at an explicit data host, or ("", false) when BaseURL()
-// would fall back to the production default. Callers that must not let the
-// production default stand in for a choice the user never made — the cell
-// path, which otherwise follows the selected login context — branch on it.
+// would fall back to the production default. See auth.resolveStoredCellSubject
+// for a caller that must tell the two apart.
 func BaseURLOverride() (string, bool) {
 	raw := strings.TrimSpace(os.Getenv(BaseURLEnvVar))
 	if raw == "" {
