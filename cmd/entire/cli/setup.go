@@ -475,6 +475,24 @@ func hookAgentOptions(selected map[types.AgentName]struct{}) []huh.Option[string
 // runManageAgents shows which agents are currently enabled and lets the user
 // add or remove agents. Deselecting an installed agent removes its hooks.
 func runManageAgents(ctx context.Context, w io.Writer, opts EnableOptions, selectFn func(available []string) ([]string, error)) error {
+	return runManageAgentsWithPreflight(ctx, w, opts, selectFn, nil)
+}
+
+func runManageAgentsWithPreflight(
+	ctx context.Context,
+	w io.Writer,
+	opts EnableOptions,
+	selectFn func(available []string) ([]string, error),
+	preflight func() error,
+) error {
+	runPreflight := func() error {
+		if preflight == nil {
+			return nil
+		}
+		fn := preflight
+		preflight = nil
+		return fn()
+	}
 	installedNames := GetAgentsWithHooksInstalled(ctx)
 
 	// Show currently installed agents
@@ -503,6 +521,9 @@ func runManageAgents(ctx context.Context, w io.Writer, opts EnableOptions, selec
 				for _, name := range installedNames {
 					discoverNamedExternalAgent(ctx, name)
 					selectedAgentNames = append(selectedAgentNames, string(name))
+				}
+				if err := runPreflight(); err != nil {
+					return err
 				}
 				return applyAgentChanges(ctx, w, selectedAgentNames, installedNames, opts)
 			}
@@ -556,6 +577,9 @@ func runManageAgents(ctx context.Context, w io.Writer, opts EnableOptions, selec
 		if err := form.Run(); err != nil {
 			return fmt.Errorf("agent selection cancelled: %w", err)
 		}
+	}
+	if err := runPreflight(); err != nil {
+		return err
 	}
 
 	// Nothing selected and nothing installed — no-op.
@@ -806,6 +830,10 @@ Examples:
 }
 
 func newEnableCmd() *cobra.Command {
+	return newEnableCmdWithIdentityResolverFactory(newEntireGitIdentityResolver)
+}
+
+func newEnableCmdWithIdentityResolverFactory(identityFactory identityResolverFactory) *cobra.Command {
 	var opts EnableOptions
 	var ignoreUntracked bool
 	var agentName string
@@ -871,7 +899,9 @@ for you and (optionally) create a matching GitHub repository via the gh CLI.`,
 			// the initial commit captures the .entire/, .claude/, hooks, and
 			// settings files that setup writes.
 			var bootstrap *bootstrapState
-			if _, err := paths.WorktreeRoot(ctx); err != nil {
+			repoRoot, repoErr := paths.WorktreeRoot(ctx)
+			repoExisted := repoErr == nil
+			if repoErr != nil {
 				bootstrapOpts.Yes = opts.Yes
 				state, bootstrapErr := runGitHubBootstrapInit(ctx, cmd.OutOrStdout(), cmd.ErrOrStderr(), bootstrapOpts)
 				if errors.Is(bootstrapErr, errBootstrapDeclined) {
@@ -890,8 +920,10 @@ for you and (optionally) create a matching GitHub repository via the gh CLI.`,
 				// "done" summary from the bootstrap finalize step.
 				opts.SuppressDoneMessage = true
 				// Re-check after bootstrap.
-				if _, err := paths.WorktreeRoot(ctx); err != nil {
-					return fmt.Errorf("bootstrap finished but no git repository detected: %w", err)
+				var rootErr error
+				repoRoot, rootErr = paths.WorktreeRoot(ctx)
+				if rootErr != nil {
+					return fmt.Errorf("bootstrap finished but no git repository detected: %w", rootErr)
 				}
 				// Visual separator between bootstrap init and agent setup.
 				printBootstrapSection(cmd.OutOrStdout(), "Enabling Entire")
@@ -939,28 +971,9 @@ for you and (optionally) create a matching GitHub repository via the gh CLI.`,
 				selectedAgent = ag
 			}
 
-			// enable runs before the repo is set up, which is exactly when the
-			// root pre-run's IsSetUpAny gate declines to build a logger. Placed
-			// after every check that can still reject this invocation, so a
-			// rejected enable leaves an untouched repo untouched.
-			ensureLogger(cmd)
-			ctx = cmd.Context()
-
-			if selectedAgent != nil {
-				// --agent is a targeted operation: set up this specific agent without
-				// affecting other agents. Unlike the interactive path, it does not
-				// uninstall hooks for other previously-enabled agents.
-				return setupAgentHooksNonInteractive(ctx, cmd.OutOrStdout(), selectedAgent, opts)
-			}
-
-			// Any setup-mutating flags should behave like `configure` on repos that
-			// are already set up. Bare `enable` remains the lightweight re-enable path.
-			if settings.IsSetUpAny(ctx) {
-				return runEnableOnConfiguredRepo(ctx, cmd, opts)
-			}
-
-			// Fresh repo — run full setup flow
-			return runSetupFlow(ctx, cmd.OutOrStdout(), opts)
+			needsIdentity := repoExisted || (bootstrap != nil && bootstrap.commit)
+			return continueEnableAfterAgentValidation(ctx, cmd, opts, selectedAgent, repoRoot, needsIdentity,
+				identityFactory(cmd.OutOrStdout(), cmd.ErrOrStderr(), insecureHTTPAuth))
 		},
 	}
 
@@ -1009,6 +1022,56 @@ for you and (optionally) create a matching GitHub repository via the gh CLI.`,
 	})
 
 	return cmd
+}
+
+func continueEnableAfterAgentValidation(
+	ctx context.Context,
+	cmd *cobra.Command,
+	opts EnableOptions,
+	selectedAgent agent.Agent,
+	repoRoot string,
+	needsIdentity bool,
+	resolveIdentity gitIdentityResolver,
+) error {
+	if selectedAgent != nil {
+		if err := runEnableIdentityPreflight(ctx, cmd, repoRoot, needsIdentity, resolveIdentity); err != nil {
+			return err
+		}
+		ensureLogger(cmd)
+		return setupAgentHooksNonInteractive(cmd.Context(), cmd.OutOrStdout(), selectedAgent, opts)
+	}
+
+	if settings.IsSetUpAny(ctx) {
+		preflight := func() error {
+			return runEnableIdentityPreflight(ctx, cmd, repoRoot, needsIdentity, resolveIdentity)
+		}
+		return runEnableOnConfiguredRepoWithPreflight(ctx, cmd, opts, preflight)
+	}
+
+	// First-time bare enable owns agent selection here so authentication can be
+	// placed after selection but before runEnableInteractive mutates hooks or
+	// settings.
+	external.DiscoverAndRegisterAlways(ctx)
+	var selectFn func(available []string) ([]string, error)
+	if opts.Yes {
+		selectFn = selectAllAgents
+	}
+	agents, err := detectOrSelectAgent(ctx, cmd.OutOrStdout(), selectFn)
+	if err != nil {
+		return fmt.Errorf("agent selection failed: %w", err)
+	}
+	if err := runEnableIdentityPreflight(ctx, cmd, repoRoot, needsIdentity, resolveIdentity); err != nil {
+		return err
+	}
+	ensureLogger(cmd)
+	return runEnableInteractive(cmd.Context(), cmd.OutOrStdout(), agents, opts)
+}
+
+func runEnableIdentityPreflight(ctx context.Context, cmd *cobra.Command, repoRoot string, needed bool, resolve gitIdentityResolver) error {
+	if !needed {
+		return nil
+	}
+	return ensureGitIdentity(ctx, cmd.OutOrStdout(), execRunner{}, repoRoot, resolve)
 }
 
 // reportRepoEnabled records the `entire enable` against the backend so the web
@@ -1183,7 +1246,19 @@ was not fully uninstalled.`,
 // management) behave like `configure`; a bare re-enable just flips the enabled
 // flag or reports current status.
 func runEnableOnConfiguredRepo(ctx context.Context, cmd *cobra.Command, opts EnableOptions) error {
+	return runEnableOnConfiguredRepoWithPreflight(ctx, cmd, opts, nil)
+}
+
+func runEnableOnConfiguredRepoWithPreflight(ctx context.Context, cmd *cobra.Command, opts EnableOptions, preflight func() error) error {
 	w := cmd.OutOrStdout()
+	runPreflight := func() error {
+		if preflight == nil {
+			return nil
+		}
+		fn := preflight
+		preflight = nil
+		return fn()
+	}
 	// This path is by definition not a first run, so it never reaches the
 	// import offer. Say so rather than dropping the flag silently.
 	if opts.ImportHistory {
@@ -1191,6 +1266,22 @@ func runEnableOnConfiguredRepo(ctx context.Context, cmd *cobra.Command, opts Ena
 	}
 	usedSetupFlow := enableUsesSetupFlow(cmd, "")
 	if usedSetupFlow {
+		if enableNeedsAgentManagement(cmd) {
+			var selectFn func(available []string) ([]string, error)
+			if opts.Yes {
+				selectFn = selectAllAgents
+			}
+			if err := runManageAgentsWithPreflight(ctx, w, opts, selectFn, runPreflight); err != nil {
+				return err
+			}
+		}
+		// Some noninteractive agent-management paths return without a picker or
+		// applying agent changes. Ensure the preflight still runs before the
+		// settings/strategy work below; this is a no-op when the picker path
+		// already invoked it.
+		if err := runPreflight(); err != nil {
+			return err
+		}
 		if hasStrategyFlags(cmd) {
 			if err := updateStrategyOptions(ctx, w, opts); err != nil {
 				return err
@@ -1201,15 +1292,8 @@ func runEnableOnConfiguredRepo(ctx context.Context, cmd *cobra.Command, opts Ena
 				return err
 			}
 		}
-		if enableNeedsAgentManagement(cmd) {
-			var selectFn func(available []string) ([]string, error)
-			if opts.Yes {
-				selectFn = selectAllAgents
-			}
-			if err := runManageAgents(ctx, w, opts, selectFn); err != nil {
-				return err
-			}
-		}
+	} else if err := runPreflight(); err != nil {
+		return err
 	}
 
 	// `entire enable` is an explicit, user-initiated recovery point. A repo

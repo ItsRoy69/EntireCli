@@ -1,0 +1,399 @@
+package cli
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"strings"
+	"testing"
+
+	cliapi "github.com/entireio/cli/cmd/entire/cli/api"
+	cliauth "github.com/entireio/cli/cmd/entire/cli/auth"
+	"github.com/entireio/cli/internal/entireclient/contexts"
+)
+
+type testExitError struct{ code int }
+
+func (e testExitError) Error() string { return fmt.Sprintf("exit status %d", e.code) }
+func (e testExitError) ExitCode() int { return e.code }
+
+func TestGitIdentityFromEntireProfile(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		profile     authProfile
+		wantName    string
+		wantEmail   string
+		wantErrText string
+	}{
+		{
+			name: "profile email",
+			profile: authProfile{
+				DisplayName:    " Octo Cat ",
+				Handle:         "octo",
+				Email:          " octo@example.com ",
+				Provider:       "github",
+				ProviderUserID: "42",
+			},
+			wantName:  "Octo Cat",
+			wantEmail: "octo@example.com",
+		},
+		{
+			name: "github private email from sparse foreign-region profile",
+			profile: authProfile{
+				Handle:         "  octo  ",
+				Provider:       " github ",
+				ProviderUserID: " 42 ",
+				ForeignRegion:  true,
+			},
+			wantName:  "octo",
+			wantEmail: "42+octo@users.noreply.github.com",
+		},
+		{
+			name:        "insufficient verified profile",
+			profile:     authProfile{Provider: "github", ProviderUserID: "42"},
+			wantErrText: "entire profile does not contain",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			name, email, err := gitIdentityFromEntireProfile(&tt.profile)
+			if tt.wantErrText != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErrText) {
+					t.Fatalf("error = %v, want text %q", err, tt.wantErrText)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("gitIdentityFromEntireProfile: %v", err)
+			}
+			if name != tt.wantName || email != tt.wantEmail {
+				t.Fatalf("identity = %q <%s>, want %q <%s>", name, email, tt.wantName, tt.wantEmail)
+			}
+		})
+	}
+}
+
+func TestEnsureGitIdentity(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name              string
+		configuredName    string
+		configuredEmail   string
+		nameReadErr       error
+		emailReadErr      error
+		emailWriteErr     error
+		incompleteProfile bool
+		wantResolverCall  bool
+		wantNameWrite     bool
+		wantEmailWrite    bool
+		wantErrText       string
+	}{
+		{
+			name:            "complete identity is a local no-op",
+			configuredName:  "Existing User",
+			configuredEmail: "existing@example.com",
+		},
+		{
+			name:             "both fields missing",
+			nameReadErr:      testExitError{code: 1},
+			emailReadErr:     testExitError{code: 1},
+			wantResolverCall: true,
+			wantNameWrite:    true,
+			wantEmailWrite:   true,
+		},
+		{
+			name:             "preserves configured name",
+			configuredName:   "Existing User",
+			emailReadErr:     testExitError{code: 1},
+			wantResolverCall: true,
+			wantEmailWrite:   true,
+		},
+		{
+			name:             "preserves configured email",
+			configuredEmail:  "existing@example.com",
+			nameReadErr:      testExitError{code: 1},
+			wantResolverCall: true,
+			wantNameWrite:    true,
+		},
+		{
+			name:        "operational read failure does not authenticate",
+			nameReadErr: testExitError{code: 2},
+			wantErrText: "read git config user.name",
+		},
+		{
+			name:             "second write failure preserves the first local write",
+			nameReadErr:      testExitError{code: 1},
+			emailReadErr:     testExitError{code: 1},
+			emailWriteErr:    errors.New("config locked"),
+			wantResolverCall: true,
+			wantNameWrite:    true,
+			wantEmailWrite:   true,
+			wantErrText:      "git config user.email",
+		},
+		{
+			name:              "incomplete verified profile writes nothing",
+			nameReadErr:       testExitError{code: 1},
+			emailReadErr:      testExitError{code: 1},
+			incompleteProfile: true,
+			wantResolverCall:  true,
+			wantErrText:       "entire profile does not contain",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			runner := newFakeRunner()
+			runner.set("git", []string{"config", "--get", "user.name"}, tt.configuredName, tt.nameReadErr)
+			runner.set("git", []string{"config", "--get", "user.email"}, tt.configuredEmail, tt.emailReadErr)
+			if tt.wantNameWrite {
+				runner.set("git", []string{"config", "user.name", "Entire User"}, "", nil)
+			}
+			if tt.wantEmailWrite {
+				runner.set("git", []string{"config", "user.email", "entire@example.com"}, "", tt.emailWriteErr)
+			}
+
+			resolverCalls := 0
+			resolve := func(context.Context) (*authProfile, error) {
+				resolverCalls++
+				if tt.incompleteProfile {
+					return &authProfile{Handle: "entire-user"}, nil
+				}
+				return &authProfile{DisplayName: "Entire User", Email: "entire@example.com"}, nil
+			}
+			err := ensureGitIdentity(t.Context(), io.Discard, runner, t.TempDir(), resolve)
+			if tt.wantErrText != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErrText) {
+					t.Fatalf("error = %v, want text %q", err, tt.wantErrText)
+				}
+			} else if err != nil {
+				t.Fatalf("ensureGitIdentity: %v", err)
+			}
+			if got := resolverCalls; got != boolInt(tt.wantResolverCall) {
+				t.Fatalf("resolver calls = %d, want %d", got, boolInt(tt.wantResolverCall))
+			}
+			if got := runner.hasCall(argsMatch("git", []string{"config", "user.name", "Entire User"})); got != tt.wantNameWrite {
+				t.Errorf("user.name write = %v, want %v", got, tt.wantNameWrite)
+			}
+			if got := runner.hasCall(argsMatch("git", []string{"config", "user.email", "entire@example.com"})); got != tt.wantEmailWrite {
+				t.Errorf("user.email write = %v, want %v", got, tt.wantEmailWrite)
+			}
+		})
+	}
+}
+
+func boolInt(v bool) int {
+	if v {
+		return 1
+	}
+	return 0
+}
+
+func TestResolveEntireIdentityProfile(t *testing.T) {
+	t.Parallel()
+
+	profile := &authProfile{DisplayName: "Entire User", Email: "entire@example.com"}
+	ctxEntry := &contexts.Context{Name: "work", CoreURL: "https://core.example.test"}
+
+	t.Run("stored context", func(t *testing.T) {
+		t.Parallel()
+		deps := identityProfileDependencies{
+			lookupEnv: func(string) (string, bool) { return "", false },
+			contexts: func() ([]*contexts.Context, string, error) {
+				return []*contexts.Context{ctxEntry}, "work", nil
+			},
+			resolveLogin: func(context.Context, *contexts.Context) (string, error) { return "stored-token", nil },
+			fetchProfile: func(_ context.Context, coreURL, token string) (*authProfile, error) {
+				if coreURL != ctxEntry.CoreURL || token != "stored-token" {
+					t.Fatalf("profile target = %q token %q", coreURL, token)
+				}
+				return profile, nil
+			},
+		}
+		got, err := resolveEntireIdentityProfile(t.Context(), deps)
+		if err != nil || got.profile != profile || got.loginServer != ctxEntry.CoreURL {
+			t.Fatalf("result = %+v, error = %v", got, err)
+		}
+	})
+
+	t.Run("valid env token bypasses stored contexts", func(t *testing.T) {
+		t.Parallel()
+		raw := makeJWT(t, `{"alg":"RS256"}`, `{"aud":"https://env-core.example.test"}`)
+		deps := identityProfileDependencies{
+			lookupEnv: func(name string) (string, bool) {
+				if name != cliauth.EnvTokenVar {
+					t.Fatalf("lookup %q", name)
+				}
+				return raw, true
+			},
+			contexts: func() ([]*contexts.Context, string, error) {
+				t.Fatal("stored contexts must not be read in ENTIRE_TOKEN mode")
+				return nil, "", nil
+			},
+			fetchProfile: func(_ context.Context, coreURL, token string) (*authProfile, error) {
+				if coreURL != "https://env-core.example.test" || token != raw {
+					t.Fatalf("profile target = %q token %q", coreURL, token)
+				}
+				return profile, nil
+			},
+		}
+		got, err := resolveEntireIdentityProfile(t.Context(), deps)
+		if err != nil || got.profile != profile {
+			t.Fatalf("result = %+v, error = %v", got, err)
+		}
+	})
+
+	t.Run("refresh failure remains operational", func(t *testing.T) {
+		t.Parallel()
+		refreshErr := errors.New("credential store unavailable")
+		deps := identityProfileDependencies{
+			lookupEnv: func(string) (string, bool) { return "", false },
+			contexts: func() ([]*contexts.Context, string, error) {
+				return []*contexts.Context{ctxEntry}, "work", nil
+			},
+			resolveLogin: func(context.Context, *contexts.Context) (string, error) { return "", refreshErr },
+			fetchProfile: func(context.Context, string, string) (*authProfile, error) {
+				t.Fatal("profile must not be fetched after refresh failure")
+				return nil, errors.New("unexpected profile fetch")
+			},
+		}
+		_, err := resolveEntireIdentityProfile(t.Context(), deps)
+		if !errors.Is(err, refreshErr) || errors.Is(err, errEntireLoginRequired) {
+			t.Fatalf("error = %v, want original operational failure", err)
+		}
+	})
+
+	t.Run("rejected env token is distinguished from stored login expiry", func(t *testing.T) {
+		t.Parallel()
+		raw := makeJWT(t, `{"alg":"RS256"}`, `{"aud":"https://env-core.example.test"}`)
+		deps := identityProfileDependencies{
+			lookupEnv: func(string) (string, bool) { return raw, true },
+			fetchProfile: func(context.Context, string, string) (*authProfile, error) {
+				return nil, &cliapi.HTTPError{StatusCode: 401}
+			},
+		}
+		_, err := resolveEntireIdentityProfile(t.Context(), deps)
+		if !errors.Is(err, errEntireEnvTokenRejected) || errors.Is(err, errEntireLoginRequired) {
+			t.Fatalf("error = %v, want env-token rejection", err)
+		}
+	})
+}
+
+func TestRecoverGitIdentity(t *testing.T) {
+	t.Parallel()
+
+	const unattendedGuidance = "Git identity is missing, and Entire authentication is required.\n" +
+		"This unattended environment cannot complete sign-in automatically.\n" +
+		"Run `entire login` in an interactive shell, then rerun `entire enable`.\n" +
+		"For unattended use, provide a valid user token in ENTIRE_TOKEN."
+	const envTokenGuidance = "ENTIRE_TOKEN could not authenticate an Entire user profile.\n" +
+		"ENTIRE_TOKEN overrides stored logins, so automatic sign-in cannot repair this session.\n" +
+		"Fix or unset ENTIRE_TOKEN, then rerun `entire enable`."
+
+	t.Run("login once then retry same target", func(t *testing.T) {
+		t.Parallel()
+		calls := 0
+		loginCalls := 0
+		profile := &authProfile{DisplayName: "Entire User", Email: "entire@example.com"}
+		deps := identityRecoveryDependencies{
+			resolve: func(context.Context) (identityProfileResult, error) {
+				calls++
+				if calls == 1 {
+					return identityProfileResult{loginServer: "https://work.example.test"}, errEntireLoginRequired
+				}
+				return identityProfileResult{profile: profile, loginServer: "https://work.example.test"}, nil
+			},
+			login: func(_ context.Context, _, _ io.Writer, server string, insecure bool) error {
+				loginCalls++
+				if server != "https://work.example.test" || !insecure {
+					t.Fatalf("login target = %q insecure=%v", server, insecure)
+				}
+				return nil
+			},
+			isUnattended: func() bool { return false },
+		}
+		got, err := recoverGitIdentity(t.Context(), io.Discard, io.Discard, true, deps)
+		if err != nil || got != profile || calls != 2 || loginCalls != 1 {
+			t.Fatalf("profile=%+v err=%v resolve=%d login=%d", got, err, calls, loginCalls)
+		}
+	})
+
+	t.Run("known unattended fails with exact guidance", func(t *testing.T) {
+		t.Parallel()
+		deps := identityRecoveryDependencies{
+			resolve: func(context.Context) (identityProfileResult, error) {
+				return identityProfileResult{}, errEntireLoginRequired
+			},
+			login: func(context.Context, io.Writer, io.Writer, string, bool) error {
+				t.Fatal("login must not run unattended")
+				return nil
+			},
+			isUnattended: func() bool { return true },
+		}
+		_, err := recoverGitIdentity(t.Context(), io.Discard, io.Discard, false, deps)
+		if err == nil || err.Error() != unattendedGuidance {
+			t.Fatalf("error = %q, want %q", err, unattendedGuidance)
+		}
+	})
+
+	t.Run("rejected env token fails with exact guidance", func(t *testing.T) {
+		t.Parallel()
+		deps := identityRecoveryDependencies{
+			resolve: func(context.Context) (identityProfileResult, error) {
+				return identityProfileResult{}, errEntireEnvTokenRejected
+			},
+			login: func(context.Context, io.Writer, io.Writer, string, bool) error {
+				t.Fatal("login cannot repair ENTIRE_TOKEN")
+				return nil
+			},
+			isUnattended: func() bool { return false },
+		}
+		_, err := recoverGitIdentity(t.Context(), io.Discard, io.Discard, false, deps)
+		if err == nil || err.Error() != envTokenGuidance {
+			t.Fatalf("error = %q, want %q", err, envTokenGuidance)
+		}
+	})
+
+	t.Run("network error is preserved without login", func(t *testing.T) {
+		t.Parallel()
+		networkErr := errors.New("dial core: connection refused")
+		deps := identityRecoveryDependencies{
+			resolve: func(context.Context) (identityProfileResult, error) { return identityProfileResult{}, networkErr },
+			login: func(context.Context, io.Writer, io.Writer, string, bool) error {
+				t.Fatal("network errors must not start login")
+				return nil
+			},
+			isUnattended: func() bool { return false },
+		}
+		_, err := recoverGitIdentity(t.Context(), io.Discard, io.Discard, false, deps)
+		if !errors.Is(err, networkErr) {
+			t.Fatalf("error = %v, want original network error", err)
+		}
+	})
+
+	t.Run("login cancellation is preserved without retry", func(t *testing.T) {
+		t.Parallel()
+		loginErr := errors.New("login cancelled")
+		resolveCalls := 0
+		deps := identityRecoveryDependencies{
+			resolve: func(context.Context) (identityProfileResult, error) {
+				resolveCalls++
+				return identityProfileResult{loginServer: "https://work.example.test"}, errEntireLoginRequired
+			},
+			login:        func(context.Context, io.Writer, io.Writer, string, bool) error { return loginErr },
+			isUnattended: func() bool { return false },
+		}
+		_, err := recoverGitIdentity(t.Context(), io.Discard, io.Discard, false, deps)
+		if !errors.Is(err, loginErr) || resolveCalls != 1 {
+			t.Fatalf("error = %v, resolve calls = %d; want cancellation and no retry", err, resolveCalls)
+		}
+	})
+}

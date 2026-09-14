@@ -64,6 +64,25 @@ func CanPromptInteractively() bool {
 	return !ttyInRawMode(tty.Input())
 }
 
+// IsKnownUnattended reports whether this process is known to be automation
+// that must not wait for an OAuth device approval. A missing TTY alone does not
+// qualify: SSH and other headless human shells can complete device login.
+func IsKnownUnattended() bool {
+	return isKnownUnattended(
+		os.Getenv(EnvTestTTY),
+		testing.Testing(),
+		isAgentSubprocessEnv(),
+		os.Getenv("CI"),
+	)
+}
+
+func isKnownUnattended(testOverride string, underTest, agentSubprocess bool, ci string) bool {
+	if testOverride != "" {
+		return testOverride != "1"
+	}
+	return underTest || agentSubprocess || (ci != "" && ci != "false")
+}
+
 // UnderTest reports whether the process is running in a test context — either
 // inside `go test` (testing.Testing()) or with EnvTestTTY explicitly set. Use
 // to skip operations that read from the real controlling terminal even when
