@@ -27,15 +27,14 @@ type crossRepoReader interface {
 // newCrossRepoReader builds the API-backed reader for a forge-qualified repo.
 // Injectable so tests can substitute a fake cell (see explain_repo_test.go).
 var newCrossRepoReader = func(ctx context.Context, insecureHTTP bool, forge, owner, repo string) (crossRepoReader, error) {
-	repoRef := explainRepoRef(forge, owner, repo)
 	// Resolve the repo_id and the cell together, from one placement: a mirror id
 	// or native repo id is only resolvable by the cell holding that repository,
 	// so a separately-chosen cell (the caller's home cell, for a multi-region
 	// repo) would be asked about an id it has never seen and answer 404.
 	placement, err := resolveForgeRepoCellPlacement(ctx, forge, owner, repo)
 	if err != nil {
-		// Not wrapped with repoRef: the placement resolver already names it,
-		// and adding it here is what made this path print the repo twice.
+		// Not wrapped with the repo ref: the placement resolver already names
+		// it, and adding it here is what made this path print the repo twice.
 		return nil, err
 	}
 	client, err := auth.NewEntireAPICellClient(ctx, insecureHTTP, placement.Target)
@@ -44,7 +43,7 @@ var newCrossRepoReader = func(ctx context.Context, insecureHTTP bool, forge, own
 		// errors (login hint, discovery guidance); surface them verbatim.
 		return nil, err //nolint:wrapcheck // pass through contextual auth errors
 	}
-	return newAPICheckpointReader(client, placement.RepoID, repoRef, explainRepoFullName(forge, owner, repo)), nil
+	return newAPICheckpointReader(client, placement.RepoID, forge, owner, repo), nil
 }
 
 // crossRepoReadKey marks a context as rendering a checkpoint read from another
@@ -146,17 +145,6 @@ func parseExplainRepoFlag(value string) (forge, owner, repo string, err error) {
 
 func explainRepoRef(forge, owner, repo string) string {
 	return forge + "/" + owner + "/" + repo
-}
-
-func explainRepoFullName(forge, owner, repo string) string {
-	// This is the identity spelling returned by entire-api's repo_full_name,
-	// not an attempt to recover a missing provider. The parser has already
-	// required forge explicitly. GitHub mirror rows retain their legacy
-	// owner/repo full_name; native rows are namespaced by et/.
-	if forge == nativeCloneForge {
-		return forge + "/" + owner + "/" + repo
-	}
-	return owner + "/" + repo
 }
 
 // explainRepoTargetsCurrentRepo reports whether the --repo value names the repo

@@ -44,8 +44,9 @@ type apiCheckpointReader struct {
 	// repoID is the repo's Entire ULID; cell checkpoint routes key on it.
 	repoID string
 	// ownerRepo is the explicit, forge-qualified display coordinate used in
-	// errors. repoFullName is the canonical identity entire-api returns: legacy
-	// GitHub mirror rows use owner/name, while native rows use et/project/repo.
+	// errors. repoFullName is the canonical identity entire-api returns: the
+	// bare pair for both forges — "owner/name" for GitHub mirrors, and
+	// "project/repo" for native rows (Core builds it without the et/ prefix).
 	ownerRepo    string
 	repoFullName string
 
@@ -57,11 +58,16 @@ type apiCheckpointReader struct {
 }
 
 // newAPICheckpointReader returns a reader for repoID's checkpoints on the cell
-// that client is already pointed at. ownerRepo is only for user-facing text;
-// repoFullName is kept separate so display formatting cannot weaken or break
-// the response identity check.
-func newAPICheckpointReader(client *api.Client, repoID, ownerRepo, repoFullName string) *apiCheckpointReader {
-	return &apiCheckpointReader{client: client, repoID: repoID, ownerRepo: ownerRepo, repoFullName: repoFullName}
+// that client is already pointed at. Both coordinates are derived here, from
+// the forge-qualified triple, so a caller cannot pair a forge-prefixed
+// identity with the bare repo_full_name the server actually returns.
+func newAPICheckpointReader(client *api.Client, repoID, forge, owner, repo string) *apiCheckpointReader {
+	return &apiCheckpointReader{
+		client:       client,
+		repoID:       repoID,
+		ownerRepo:    explainRepoRef(forge, owner, repo),
+		repoFullName: owner + "/" + repo,
+	}
 }
 
 // --- wire shapes ------------------------------------------------------
