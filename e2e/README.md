@@ -41,7 +41,7 @@ e2e/
 
 ## Control-Plane Tests
 
-`controlplane/` runs the `entire` binary against the production control plane with no coding agent involved. Its `TestMain` logs in once per run with `entire login --device`, completing GitHub sign-in and the device approval in headless Chromium (playwright-go) as the GitHub test user named by `E2E_GH_USERNAME` / `E2E_GH_PASSWORD`; every test then starts from that session. The CLI's config and token store live in a temp dir outside `e2e/artifacts/`, which CI uploads.
+`controlplane/` runs the `entire` binary against the production control plane with no coding agent involved. Its `TestMain` logs in once per run with `entire login --device`, completing GitHub sign-in and the device approval in headless Chromium (playwright-go) as the GitHub test user named by `E2E_GH_USERNAME` / `E2E_GH_PASSWORD` / `E2E_GH_TOTP_SECRET`; every test then starts from that session. The account has authenticator-app 2FA enabled on purpose: GitHub skips its emailed new-device verification for 2FA accounts, and the test computes the one-time code from the secret. The CLI's config and token store live in a temp dir outside `e2e/artifacts/`, which CI uploads.
 
 Tests create real resources named `e2e-cp-<timestamp>` and delete them in reverse order (repo, project, org) through `t.Cleanup`. The test account may own at most three orgs, so a run that dies before cleanup needs its leftovers removed by hand.
 
@@ -72,7 +72,8 @@ Run it with `mise run test:e2e:controlplane [filter]`; the task installs the Pla
 | `COPILOT_GITHUB_TOKEN` | Required for Copilot CLI, unless a `copilot login` credential is already stored. `GH_TOKEN` and `GITHUB_TOKEN` also work — Copilot reads all three, in that order of precedence. A `gh auth login` alone is not enough: Copilot does not read gh's config. | — |
 | `E2E_KEEP_AGENT_HOME` | Set to `1` to preserve the isolated `COPILOT_HOME` a session ran under (holds Copilot's own logs) | unset |
 | `E2E_GH_USERNAME` | GitHub test user for the control-plane tests' `entire login --device` | — |
-| `E2E_GH_PASSWORD` | Password of that GitHub test user (the account must not require 2FA or device verification) | — |
+| `E2E_GH_PASSWORD` | Password of that GitHub test user | — |
+| `E2E_GH_TOTP_SECRET` | The account's authenticator-app setup key (base32, as GitHub displays it) | — |
 
 ## Debugging Failures
 

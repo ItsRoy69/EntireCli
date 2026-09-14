@@ -20,10 +20,11 @@ import (
 )
 
 // deviceLogin runs `entire login --device` against production and completes
-// the approval in a headless browser: GitHub sign-in as the test user, then
-// the Authorize button on Entire's device page. The returned error never
-// carries the password, the device code, or the approval URL.
-func deviceLogin(ctx context.Context, username, password string) error {
+// the approval in a headless browser: GitHub sign-in as the test user with
+// its password and authenticator code, then the Authorize button on Entire's
+// device page. The returned error never carries the password, the TOTP
+// secret, the device code, or the approval URL.
+func deviceLogin(ctx context.Context, username, password, totpSecret string) error {
 	cmd := execx.NonInteractive(ctx, entire.BinPath(), "login", "--device")
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
@@ -49,7 +50,7 @@ func deviceLogin(ctx context.Context, username, password string) error {
 		_ = cmd.Wait()
 		return fmt.Errorf("%w\nstderr:\n%s", err, stderr.String())
 	}
-	redact := strings.NewReplacer(code, "[device code]", approvalURL, "[approval url]", password, "[password]")
+	redact := strings.NewReplacer(code, "[device code]", approvalURL, "[approval url]", password, "[password]", totpSecret, "[totp secret]")
 
 	go func() {
 		// Drain before Wait: Wait closes the pipe.
@@ -58,7 +59,7 @@ func deviceLogin(ctx context.Context, username, password string) error {
 		close(exited)
 	}()
 
-	approveErr := approveInBrowser(ctx, exited, approvalURL, code, username, password)
+	approveErr := approveInBrowser(ctx, exited, approvalURL, code, username, password, totpSecret)
 	if approveErr != nil {
 		_ = cmd.Process.Kill()
 	}
@@ -106,7 +107,7 @@ func readDevicePrompt(stdout *bufio.Reader) (code, approvalURL string, err error
 }
 
 // approveInBrowser drives the approval page until the login process exits.
-func approveInBrowser(ctx context.Context, exited <-chan struct{}, approvalURL, code, username, password string) error {
+func approveInBrowser(ctx context.Context, exited <-chan struct{}, approvalURL, code, username, password, totpSecret string) error {
 	pw, err := playwright.Run()
 	if err != nil {
 		return fmt.Errorf("start playwright (install it with `go run github.com/mxschmitt/playwright-go/cmd/playwright install chromium`): %w", err)
@@ -126,7 +127,7 @@ func approveInBrowser(ctx context.Context, exited <-chan struct{}, approvalURL, 
 		return fmt.Errorf("open approval page: %w", err)
 	}
 
-	a := &approver{page: page, code: code, username: username, password: password}
+	a := &approver{page: page, code: code, username: username, password: password, totpSecret: totpSecret}
 	tick := time.NewTicker(750 * time.Millisecond)
 	defer tick.Stop()
 	for {
@@ -146,17 +147,20 @@ func approveInBrowser(ctx context.Context, exited <-chan struct{}, approvalURL, 
 // approver takes one action per step on whichever page the login flow is
 // showing; the caller waits between steps for redirects to settle.
 type approver struct {
-	page               playwright.Page
-	code               string
-	username, password string
-	submitted          bool
+	page                           playwright.Page
+	code                           string
+	username, password, totpSecret string
+	submitted, otpSubmitted        bool
 }
 
 var (
 	gitHubBadCredentials = regexp.MustCompile(`(?i)incorrect username or password`)
 	gitHubVerification   = regexp.MustCompile(`(?i)verify your identity|enter.*(authentication|verification) code|captcha`)
-	gitHubVerifyPaths    = regexp.MustCompile(`/sessions/(two-factor|verified-device)|/sudo`)
+	gitHubVerifyPaths    = regexp.MustCompile(`/sessions/verified-device|/sudo`)
+	gitHubOTPRejected    = regexp.MustCompile(`(?i)two-factor authentication failed`)
 	gitHubSignIn         = regexp.MustCompile(`(?i)^sign in$`)
+	gitHubVerify         = regexp.MustCompile(`(?i)^verify$`)
+	gitHubAuthenticator  = regexp.MustCompile(`(?i)authenticator app`)
 	gitHubAuthorizeApp   = regexp.MustCompile(`(?i)^authorize .*entire`)
 )
 
@@ -192,6 +196,9 @@ func (a *approver) stepGitHub(current *url.URL) error {
 	if gitHubBadCredentials.MatchString(body) {
 		return errors.New("GitHub rejected the username or password")
 	}
+	if strings.HasPrefix(current.Path, "/sessions/two-factor") {
+		return a.stepTwoFactor(body)
+	}
 	if gitHubVerifyPaths.MatchString(current.Path) || gitHubVerification.MatchString(body) {
 		return errors.New("GitHub requires additional verification; username/password cannot complete this login")
 	}
@@ -212,6 +219,43 @@ func (a *approver) stepGitHub(current *url.URL) error {
 	if visible, _ := authorize.IsVisible(); visible {
 		if enabled, _ := authorize.IsEnabled(); enabled {
 			return authorize.Click()
+		}
+	}
+	return nil
+}
+
+// stepTwoFactor answers GitHub's authenticator-app prompt with the current
+// TOTP code. GitHub auto-submits a complete code, so the Verify button is
+// only clicked when it is still there.
+func (a *approver) stepTwoFactor(body string) error {
+	if gitHubOTPRejected.MatchString(body) {
+		return errors.New("GitHub rejected the one-time code; check the TOTP secret and the clock")
+	}
+	otp := a.page.Locator(`input[name="app_otp"], input[autocomplete="one-time-code"]`).First()
+	if visible, _ := otp.IsVisible(); !visible {
+		// GitHub offered another second factor first; switch to the app.
+		app := a.page.GetByRole(*playwright.AriaRoleLink, playwright.PageGetByRoleOptions{Name: gitHubAuthenticator}).
+			Or(a.page.GetByRole(*playwright.AriaRoleButton, playwright.PageGetByRoleOptions{Name: gitHubAuthenticator})).First()
+		if visible, _ := app.IsVisible(); visible {
+			return app.Click()
+		}
+		return nil
+	}
+	if a.otpSubmitted {
+		return nil
+	}
+	code, err := totpCode(a.totpSecret, time.Now())
+	if err != nil {
+		return err
+	}
+	if err := otp.Fill(code); err != nil {
+		return err
+	}
+	a.otpSubmitted = true
+	verify := a.page.GetByRole(*playwright.AriaRoleButton, playwright.PageGetByRoleOptions{Name: gitHubVerify})
+	if visible, _ := verify.IsVisible(); visible {
+		if enabled, _ := verify.IsEnabled(); enabled {
+			return verify.Click()
 		}
 	}
 	return nil

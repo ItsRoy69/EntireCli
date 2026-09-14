@@ -21,15 +21,16 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	username, password := os.Getenv("E2E_GH_USERNAME"), os.Getenv("E2E_GH_PASSWORD")
-	if username == "" || password == "" {
-		fmt.Fprintln(os.Stderr, "preflight: E2E_GH_USERNAME and E2E_GH_PASSWORD must be set (GitHub test user for `entire login --device`)")
+	username, password, totpSecret := os.Getenv("E2E_GH_USERNAME"), os.Getenv("E2E_GH_PASSWORD"), os.Getenv("E2E_GH_TOTP_SECRET")
+	if username == "" || password == "" || totpSecret == "" {
+		fmt.Fprintln(os.Stderr, "preflight: E2E_GH_USERNAME, E2E_GH_PASSWORD, and E2E_GH_TOTP_SECRET must be set (GitHub test user for `entire login --device`)")
 		os.Exit(1)
 	}
 	// Nothing spawned below (entire, git, git-remote-entire, Chromium) needs
 	// the GitHub credentials.
 	os.Unsetenv("E2E_GH_USERNAME")
 	os.Unsetenv("E2E_GH_PASSWORD")
+	os.Unsetenv("E2E_GH_TOTP_SECRET")
 
 	runDir := os.Getenv("E2E_ARTIFACT_DIR")
 	if runDir == "" {
@@ -92,7 +93,7 @@ func TestMain(m *testing.M) {
 	gitenv.IsolateMain()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	err = deviceLogin(ctx, username, password)
+	err = deviceLogin(ctx, username, password, totpSecret)
 	cancel()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "control-plane e2e: login failed: %v\n", err)
