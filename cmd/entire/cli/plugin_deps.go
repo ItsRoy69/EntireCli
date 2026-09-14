@@ -312,7 +312,7 @@ func RunPluginDoctor(ctx context.Context) ([]PluginDoctorIssue, error) {
 	installedByName := map[string]*InstalledPlugin{}
 	for _, p := range installed {
 		installedByName[p.Name] = p
-		if _, err := checkManagedPluginRunnable(p.Path); err != nil {
+		if reinstallFixes, err := checkManagedPluginRunnable(p.Path); err != nil {
 			problem := "managed entry cannot be run: " + err.Error()
 			if p.Symlink {
 				problem += " (link to " + p.LinkTarget + ")"
@@ -320,14 +320,14 @@ func RunPluginDoctor(ctx context.Context) ([]PluginDoctorIssue, error) {
 			issues = append(issues, PluginDoctorIssue{
 				Plugin:  p.Name,
 				Problem: problem,
-				Fix:     entryRepairFix(p.Name),
+				Fix:     entryRepairFix(p.Name, reinstallFixes),
 			})
 		} else if p.Symlink {
 			if _, err := exec.LookPath(p.Path); err != nil {
 				issues = append(issues, PluginDoctorIssue{
 					Plugin:  p.Name,
 					Problem: "managed entry is a dangling or non-executable link to " + p.LinkTarget,
-					Fix:     entryRepairFix(p.Name),
+					Fix:     entryRepairFix(p.Name, true),
 				})
 			}
 		}
@@ -401,10 +401,21 @@ func reinstallCommand(m *PluginManifest) string {
 	return cmd
 }
 
-// entryRepairFix is the remedy for a bin/ entry that cannot be run. It names
-// the same command the on-demand dispatcher does (installMissingPlugin).
-func entryRepairFix(name string) string {
-	return fmt.Sprintf("reinstall: entire plugin install %s --force, or remove it: entire plugin remove %s", name, name)
+// entryRepairFix preserves the source and options of a release install.
+// Entries without a manifest belong to local development, so rebuilding is
+// the remedy rather than replacing them with a release from the index.
+func entryRepairFix(name string, reinstallFixes bool) string {
+	if !reinstallFixes {
+		return ""
+	}
+	m, err := LoadPluginManifest(name)
+	if err != nil {
+		return "" // An unreadable manifest does not establish a safe repair source.
+	}
+	if m != nil {
+		return "reinstall: " + reinstallCommand(m)
+	}
+	return "rebuild the target or run: entire plugin remove " + name
 }
 
 // checkManagedBinaryIntegrity re-hashes a managed plugin's binary and
@@ -459,6 +470,9 @@ func checkManagedBinaryIntegrity(m *PluginManifest) []PluginDoctorIssue {
 	entry, err := FindInstalledPlugin(m.Name)
 	if err != nil || entry == nil {
 		return issues
+	}
+	if _, err := checkManagedPluginRunnable(entry.Path); err != nil {
+		return issues // The entry check already reports the fault and its remedy.
 	}
 	entryInfo, err := os.Stat(entry.Path)
 	if err != nil {

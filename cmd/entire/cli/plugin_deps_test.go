@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -299,7 +300,7 @@ func TestRunPluginDoctor_DetectsTamperedBinary(t *testing.T) { //nolint:parallel
 }
 
 // The bin/ entry is what the dispatcher execs, so doctor checks it too: an
-// entry that cannot be run gets the same remedy the on-demand path prints, and
+// entry that cannot be run gets a repair from its install manifest, and
 // a non-symlink entry whose bytes drifted from pkg/ is reported even when pkg/
 // still matches the manifest.
 func TestRunPluginDoctor_ChecksBinEntry(t *testing.T) { //nolint:paralleltest // mutates env
@@ -340,17 +341,16 @@ func TestRunPluginDoctor_ChecksBinEntry(t *testing.T) { //nolint:paralleltest //
 		return strings.Join(p, " | "), strings.Join(f, " | ")
 	}
 
-	// An empty entry cannot be run; the remedy names the same command as the
-	// on-demand dispatcher.
+	// An empty entry gets one fault and a repair from its recorded source.
 	if err := os.WriteFile(entry, nil, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	problems, fixes := doctor()
-	if !strings.Contains(problems, "managed entry cannot be run: it is an empty file") {
+	if problems != "managed entry cannot be run: it is an empty file" {
 		t.Errorf("doctor missed the empty bin entry: %s", problems)
 	}
-	if !strings.Contains(fixes, "entire plugin install demo --force") {
-		t.Errorf("doctor remedy does not match the on-demand path: %s", fixes)
+	if fixes != "reinstall: entire plugin install https://x.example/entire-demo --force" {
+		t.Errorf("doctor remedy does not preserve the source: %s", fixes)
 	}
 
 	// A copy whose bytes drifted from pkg/ while pkg/ still matches the manifest.
@@ -542,5 +542,78 @@ func TestDoctorReinstallCommand_CarriesAllowUnverified(t *testing.T) {
 	got := reinstallCommand(unverified)
 	if !strings.Contains(got, "--force") || !strings.Contains(got, "--allow-unverified") {
 		t.Errorf("unverified install needs both flags to be reinstallable: %q", got)
+	}
+}
+
+func TestRunPluginDoctor_EntryRepair(t *testing.T) { //nolint:paralleltest // mutates env
+	for _, kind := range []string{"dangling", "non-executable", "empty"} {
+		t.Run(kind, func(t *testing.T) {
+			for _, release := range []bool{false, true} {
+				name := "local"
+				if release {
+					name = "release"
+				}
+				t.Run(name, func(t *testing.T) {
+					withIsolatedPluginEnv(t)
+					binDir, err := EnsurePluginBinDir()
+					if err != nil {
+						t.Fatal(err)
+					}
+					entry := filepath.Join(binDir, pluginBinaryName("demo"))
+					target := filepath.Join(t.TempDir(), "target")
+					switch kind {
+					case "empty":
+						if err := os.WriteFile(entry, nil, 0o755); err != nil {
+							t.Fatal(err)
+						}
+					default:
+						if kind == "non-executable" {
+							if runtime.GOOS == "windows" {
+								t.Skip("requires Unix executable bits")
+							}
+							if err := os.WriteFile(target, []byte("binary"), 0o644); err != nil {
+								t.Fatal(err)
+							}
+						}
+						if err := os.Symlink(target, entry); err != nil {
+							t.Skipf("symlinks unavailable: %v", err)
+						}
+					}
+					want := "rebuild the target or run: entire plugin remove demo"
+					if release {
+						if err := SavePluginManifest(&PluginManifest{
+							Name: "demo", RepoURL: "https://x.example/custom-demo",
+							Tag: "v1.2.3", Pinned: true, Unverified: true,
+						}); err != nil {
+							t.Fatal(err)
+						}
+						want = "reinstall: entire plugin install https://x.example/custom-demo --force --allow-unverified --pin v1.2.3"
+					}
+					issues, err := RunPluginDoctor(context.Background())
+					if err != nil {
+						t.Fatal(err)
+					}
+					var entryIssues []PluginDoctorIssue
+					for _, issue := range issues {
+						if strings.HasPrefix(issue.Problem, "managed entry") {
+							entryIssues = append(entryIssues, issue)
+						}
+					}
+					if len(entryIssues) != 1 {
+						t.Fatalf("entry issues = %+v, want one", entryIssues)
+					}
+					if entryIssues[0].Fix != want {
+						t.Errorf("fix = %q, want %q", entryIssues[0].Fix, want)
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestEntryRepairFix_NonRepairable(t *testing.T) {
+	t.Parallel()
+	if got := entryRepairFix("demo", false); got != "" {
+		t.Errorf("non-repairable failure suggests a repair: %q", got)
 	}
 }
