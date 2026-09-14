@@ -145,8 +145,7 @@ func (f *CellClientFactory) ClientFor(ctx context.Context, target *CellTarget) (
 }
 
 // cellBaseURLFor resolves the cell origin ClientFor dials for target, checked
-// safe to send the login JWT to. Split out so the routing decision is testable
-// without a network round trip through the returned client.
+// safe to send the login JWT to.
 func (f *CellClientFactory) cellBaseURLFor(ctx context.Context, target *CellTarget) (string, error) {
 	jurisdiction, err := targetJurisdiction(target, f.subject.loginJWT)
 	if err != nil {

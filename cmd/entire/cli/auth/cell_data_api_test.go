@@ -331,10 +331,6 @@ func TestResolveTargetCellBaseURL(t *testing.T) {
 	if got, err := resolveTargetCellBaseURL(ctx, &CellTarget{Jurisdiction: "eu"}, "https://aws-us-east-2.api.entire.io", "eu", catalog.URL, "login", catalog.Client()); err != nil || got != "https://eu.api.entire.io" {
 		t.Fatalf("direct cell + explicit jurisdiction: got %q, %v (want catalog-resolved eu cell)", got, err)
 	}
-	// With NO data host configured the only origin known is the login core,
-	// which is not a cell: even a loopback core is not dialed verbatim — the
-	// catalog decides, so a local-dev login lands on the cell its core
-	// advertises rather than on the core itself.
 	if got, err := resolveTargetCellBaseURL(ctx, nil, "", "eu", catalog.URL, "login", catalog.Client()); err != nil || got != "https://eu.api.entire.io" {
 		t.Fatalf("no data host: got %q, %v (want catalog-resolved cell, never the core)", got, err)
 	}
@@ -609,10 +605,8 @@ func TestCellClientFactory_UsesLoginJWTDirectly(t *testing.T) {
 
 // catalogTransport serves GET /api/v1/clusters for one core host from a canned
 // listing and 404s everything else, recording the catalog requests it sees. It
-// stands in for a real (https) core so the context-following cell path can be
-// tested with production-shaped context CoreURLs instead of loopback httptest
-// URLs — a loopback CoreURL is kept verbatim as the cell and never reaches the
-// catalog.
+// stands in for a real (https) core so the cell path can be tested with
+// production-shaped context CoreURLs.
 type catalogTransport struct {
 	coreHost string
 	listing  string
@@ -747,8 +741,6 @@ func TestCellClientFactory_CellBaseURLFollowsSelectedContext(t *testing.T) {
 			if tc.flagContext != "" {
 				contexts.SetFlagOverrideForTest(t, tc.flagContext)
 			}
-			// The selected login (flag, else env, else current) decides which
-			// environment's catalog must be listed, with that login's JWT.
 			selected := cmp.Or(tc.flagContext, tc.envContext, tc.current)
 			want, wantJWT := prodFixture, prodJWT
 			if selected == staging {

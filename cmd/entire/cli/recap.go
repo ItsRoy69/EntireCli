@@ -200,11 +200,9 @@ func runRecap(ctx context.Context, w, errW io.Writer, f *recapFlags) error {
 // failures of the data-API path itself surface — except ErrNotLoggedIn, which
 // recap tolerates, rendering and letting the server answer 401.
 //
-// The one cell failure that does surface is one the data API cannot stand in
-// for: when the selected login is not in the data API's environment
-// (auth.DataAPIServesSelectedLogin), falling back would ask production about a
-// staging login, so the cell error is returned. A missing login still takes the
-// tolerant path, since no environment has been selected to stay in.
+// The fallback is taken only while the data API is in the login's environment
+// (auth.DataAPIServesSelectedLogin); a missing login still takes the tolerant
+// path, since no environment has been selected to stay in.
 func newRecapClient(ctx context.Context, insecureHTTP bool) (client *api.Client, repoScope, repoName string, err error) {
 	cellClient, cellErr := auth.NewEntireAPICellClient(ctx, insecureHTTP, nil)
 	if cellErr == nil {
