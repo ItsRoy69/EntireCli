@@ -893,8 +893,8 @@ for you and (optionally) create a matching GitHub repository via the gh CLI.`,
 			// bootstrap one (git init + optional GitHub repo). If the user
 			// declines, fall back to the legacy prerequisite error.
 			//
-			// The bootstrap runs in two phases: phase 1 (git init + identity
-			// + gather GitHub choices) before agent setup, phase 2
+			// The bootstrap runs in two phases: phase 1 (git init + gather
+			// GitHub choices) before agent setup and identity recovery, phase 2
 			// (initial commit + gh repo create + push) after agent setup so
 			// the initial commit captures the .entire/, .claude/, hooks, and
 			// settings files that setup writes.

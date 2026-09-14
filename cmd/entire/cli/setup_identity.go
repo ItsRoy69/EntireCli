@@ -37,10 +37,11 @@ type gitIdentityResolver func(context.Context) (*authProfile, error)
 type identityResolverFactory func(io.Writer, io.Writer, bool) gitIdentityResolver
 
 type identityProfileDependencies struct {
-	lookupEnv    func(string) (string, bool)
-	contexts     contextsProvider
-	resolveLogin loginTokenResolver
-	fetchProfile profileFetcher
+	lookupEnv     func(string) (string, bool)
+	contexts      contextsProvider
+	resolveLogin  loginTokenResolver
+	fetchProfile  profileFetcher
+	allowInsecure bool
 }
 
 type identityProfileResult struct {
@@ -54,17 +55,18 @@ type identityRecoveryDependencies struct {
 	isUnattended func() bool
 }
 
-func defaultIdentityProfileDependencies() identityProfileDependencies {
+func defaultIdentityProfileDependencies(insecure bool) identityProfileDependencies {
 	return identityProfileDependencies{
-		lookupEnv:    os.LookupEnv,
-		contexts:     cliauth.Contexts,
-		resolveLogin: cliauth.RefreshedLoginToken,
-		fetchProfile: defaultFetchProfile,
+		lookupEnv:     os.LookupEnv,
+		contexts:      cliauth.Contexts,
+		resolveLogin:  cliauth.RefreshedLoginToken,
+		fetchProfile:  defaultFetchProfile,
+		allowInsecure: insecure,
 	}
 }
 
-func defaultIdentityRecoveryDependencies() identityRecoveryDependencies {
-	profileDeps := defaultIdentityProfileDependencies()
+func defaultIdentityRecoveryDependencies(insecure bool) identityRecoveryDependencies {
+	profileDeps := defaultIdentityProfileDependencies(insecure)
 	return identityRecoveryDependencies{
 		resolve: func(ctx context.Context) (identityProfileResult, error) {
 			return resolveEntireIdentityProfile(ctx, profileDeps)
@@ -77,29 +79,35 @@ func defaultIdentityRecoveryDependencies() identityRecoveryDependencies {
 }
 
 func newEntireGitIdentityResolver(outW, errW io.Writer, insecure bool) gitIdentityResolver {
-	deps := defaultIdentityRecoveryDependencies()
+	deps := defaultIdentityRecoveryDependencies(insecure)
 	return func(ctx context.Context) (*authProfile, error) {
 		applyInsecureHTTPAuth(insecure)
 		return recoverGitIdentity(ctx, outW, errW, insecure, deps)
 	}
 }
 
-func gitIdentityFromEntireProfile(profile *authProfile) (string, string, error) {
+func gitIdentityFromEntireProfile(profile *authProfile, existingName, existingEmail string) (string, string, error) {
 	if profile == nil {
 		return "", "", errors.New("entire profile does not contain a verified Git name and email")
 	}
 
-	name := strings.TrimSpace(profile.DisplayName)
+	name := strings.TrimSpace(existingName)
 	handle := strings.TrimSpace(profile.Handle)
 	if name == "" {
-		name = handle
+		name = strings.TrimSpace(profile.DisplayName)
+		if name == "" {
+			name = handle
+		}
 	}
 
-	email := strings.TrimSpace(profile.Email)
+	email := strings.TrimSpace(existingEmail)
 	provider := strings.TrimSpace(profile.Provider)
 	providerUserID := strings.TrimSpace(profile.ProviderUserID)
-	if email == "" && provider == "github" && providerUserID != "" && handle != "" {
-		email = fmt.Sprintf("%s+%s@users.noreply.github.com", providerUserID, handle)
+	if email == "" {
+		email = strings.TrimSpace(profile.Email)
+		if email == "" && provider == "github" && providerUserID != "" && handle != "" {
+			email = fmt.Sprintf("%s+%s@users.noreply.github.com", providerUserID, handle)
+		}
 	}
 
 	if name == "" || email == "" {
@@ -131,15 +139,9 @@ func ensureGitIdentity(
 	if err != nil {
 		return err
 	}
-	name, email, err := gitIdentityFromEntireProfile(profile)
+	name, email, err := gitIdentityFromEntireProfile(profile, existingName, existingEmail)
 	if err != nil {
 		return err
-	}
-	if nameSet {
-		name = existingName
-	}
-	if emailSet {
-		email = existingEmail
 	}
 
 	if !nameSet {
@@ -202,6 +204,11 @@ func resolveEntireIdentityProfile(ctx context.Context, deps identityProfileDepen
 	}
 	if strings.TrimSpace(active.CoreURL) != "" {
 		result.loginServer = active.CoreURL
+	}
+	if !deps.allowInsecure {
+		if err := api.RequireSecureURL(active.CoreURL); err != nil {
+			return result, fmt.Errorf("context login server URL check: %w", err)
+		}
 	}
 	token, err := deps.resolveLogin(ctx, active)
 	if err != nil {

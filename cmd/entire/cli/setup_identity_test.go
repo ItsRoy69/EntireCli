@@ -62,7 +62,7 @@ func TestGitIdentityFromEntireProfile(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			name, email, err := gitIdentityFromEntireProfile(&tt.profile)
+			name, email, err := gitIdentityFromEntireProfile(&tt.profile, "", "")
 			if tt.wantErrText != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantErrText) {
 					t.Fatalf("error = %v, want text %q", err, tt.wantErrText)
@@ -83,17 +83,17 @@ func TestEnsureGitIdentity(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name              string
-		configuredName    string
-		configuredEmail   string
-		nameReadErr       error
-		emailReadErr      error
-		emailWriteErr     error
-		incompleteProfile bool
-		wantResolverCall  bool
-		wantNameWrite     bool
-		wantEmailWrite    bool
-		wantErrText       string
+		name             string
+		configuredName   string
+		configuredEmail  string
+		nameReadErr      error
+		emailReadErr     error
+		emailWriteErr    error
+		profile          *authProfile
+		wantResolverCall bool
+		wantNameWrite    bool
+		wantEmailWrite   bool
+		wantErrText      string
 	}{
 		{
 			name:            "complete identity is a local no-op",
@@ -138,12 +138,28 @@ func TestEnsureGitIdentity(t *testing.T) {
 			wantErrText:      "git config user.email",
 		},
 		{
-			name:              "incomplete verified profile writes nothing",
-			nameReadErr:       testExitError{code: 1},
-			emailReadErr:      testExitError{code: 1},
-			incompleteProfile: true,
-			wantResolverCall:  true,
-			wantErrText:       "entire profile does not contain",
+			name:             "configured email only requires a profile name",
+			configuredEmail:  "existing@example.com",
+			nameReadErr:      testExitError{code: 1},
+			profile:          &authProfile{DisplayName: "Entire User"},
+			wantResolverCall: true,
+			wantNameWrite:    true,
+		},
+		{
+			name:             "configured name only requires a profile email",
+			configuredName:   "Existing User",
+			emailReadErr:     testExitError{code: 1},
+			profile:          &authProfile{Email: "entire@example.com"},
+			wantResolverCall: true,
+			wantEmailWrite:   true,
+		},
+		{
+			name:             "incomplete verified profile writes nothing",
+			nameReadErr:      testExitError{code: 1},
+			emailReadErr:     testExitError{code: 1},
+			profile:          &authProfile{Handle: "entire-user"},
+			wantResolverCall: true,
+			wantErrText:      "entire profile does not contain",
 		},
 	}
 
@@ -164,8 +180,8 @@ func TestEnsureGitIdentity(t *testing.T) {
 			resolverCalls := 0
 			resolve := func(context.Context) (*authProfile, error) {
 				resolverCalls++
-				if tt.incompleteProfile {
-					return &authProfile{Handle: "entire-user"}, nil
+				if tt.profile != nil {
+					return tt.profile, nil
 				}
 				return &authProfile{DisplayName: "Entire User", Email: "entire@example.com"}, nil
 			}
@@ -221,6 +237,30 @@ func TestResolveEntireIdentityProfile(t *testing.T) {
 		got, err := resolveEntireIdentityProfile(t.Context(), deps)
 		if err != nil || got.profile != profile || got.loginServer != ctxEntry.CoreURL {
 			t.Fatalf("result = %+v, error = %v", got, err)
+		}
+	})
+
+	t.Run("stored insecure context is rejected before profile fetch", func(t *testing.T) {
+		t.Parallel()
+		insecureContext := &contexts.Context{Name: "local", CoreURL: "http://127.0.0.1:8787"}
+		fetchCalls := 0
+		deps := identityProfileDependencies{
+			lookupEnv: func(string) (string, bool) { return "", false },
+			contexts: func() ([]*contexts.Context, string, error) {
+				return []*contexts.Context{insecureContext}, "local", nil
+			},
+			resolveLogin: func(context.Context, *contexts.Context) (string, error) { return "stored-token", nil },
+			fetchProfile: func(context.Context, string, string) (*authProfile, error) {
+				fetchCalls++
+				return profile, nil
+			},
+		}
+		_, err := resolveEntireIdentityProfile(t.Context(), deps)
+		if !errors.Is(err, cliapi.ErrInsecureHTTP) {
+			t.Fatalf("error = %v, want ErrInsecureHTTP", err)
+		}
+		if fetchCalls != 0 {
+			t.Fatalf("profile fetch calls = %d, want 0", fetchCalls)
 		}
 	})
 
