@@ -126,18 +126,19 @@ func installMissingPlugin(ctx context.Context, rootCmd *cobra.Command, name stri
 }
 
 // managedEntryUnrunnable wraps checkManagedPluginRunnable's verdict for a
-// managed bin/ entry into the user-facing error, attaching the reinstall
-// remedy only when a reinstall repairs the condition. Nil when it runs.
+// managed bin/ entry into the user-facing error, attaching the repair
+// `plugin doctor` gives for the same entry (entryRepairFix) when there is
+// one. Nil when it runs.
 func managedEntryUnrunnable(name, path string) error {
 	reinstallFixes, err := checkManagedPluginRunnable(path)
 	if err == nil {
 		return nil
 	}
 	broken := fmt.Errorf("the entire-%s plugin is installed at %s but cannot be run: %w", name, path, err)
-	if !reinstallFixes {
-		return broken
+	if fix := entryRepairFix(name, reinstallFixes); fix != "" {
+		return fmt.Errorf("%w; %s", broken, fix)
 	}
-	return fmt.Errorf("%w; reinstall it with 'entire plugin install %s --force'", broken, name)
+	return broken
 }
 
 // isManagedBinEntry reports whether path sits directly in the managed bin dir.

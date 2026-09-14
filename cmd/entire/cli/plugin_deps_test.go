@@ -617,3 +617,20 @@ func TestEntryRepairFix_NonRepairable(t *testing.T) {
 		t.Errorf("non-repairable failure suggests a repair: %q", got)
 	}
 }
+
+// A manifest that exists but cannot be read is not a repair source: the entry
+// is not local development, so rebuild-or-remove would be wrong, and the
+// source a reinstall would name is unknown, so no remedy is the honest answer.
+func TestEntryRepairFix_UnreadableManifest(t *testing.T) { //nolint:paralleltest // mutates env
+	withIsolatedPluginEnv(t)
+	dir, err := EnsurePluginPkgDir("demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, pluginManifestFileName), []byte("name: [unterminated\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := entryRepairFix("demo", true); got != "" {
+		t.Errorf("an unreadable manifest produced a repair: %q", got)
+	}
+}

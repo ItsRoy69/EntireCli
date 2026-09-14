@@ -273,7 +273,9 @@ func TestMaybeRunPlugin_AnnouncementNeverEchoesArguments(t *testing.T) { //nolin
 // whose target moved — is neither run nor offered for installation: exec'ing
 // it fails with a fork/exec ENOENT naming a path the user never chose, and
 // prompting dead-ends on the already-installed guard. Both are replaced by a
-// message that says what is broken and how to repair it.
+// message that says what is broken and how to repair it — and with no
+// manifest the entry is local development, so the repair is rebuild-or-remove,
+// not the index release a bare-name reinstall would fetch over the symlink.
 func TestMaybeRunPlugin_BrokenManagedEntryReportsARemedy(t *testing.T) { //nolint:paralleltest // isolates PATH and managed plugins
 	withIsolatedPluginEnv(t)
 	interceptVersionCheck(t)
@@ -315,7 +317,7 @@ func TestMaybeRunPlugin_BrokenManagedEntryReportsARemedy(t *testing.T) { //nolin
 		entry,
 		"cannot be run",
 		"points at a file that no longer exists",
-		"entire plugin install graph --force",
+		"rebuild the target or run: entire plugin remove graph",
 	} {
 		if !strings.Contains(stderr.String(), want) {
 			t.Errorf("missing %q in the diagnosis: %q", want, stderr.String())
@@ -328,7 +330,9 @@ func TestMaybeRunPlugin_BrokenManagedEntryReportsARemedy(t *testing.T) { //nolin
 
 // A 0-byte managed entry is found by exec.LookPath, so it reaches dispatch
 // rather than the on-demand path; exec would then fail with an opaque "exec
-// format error". Dispatch must diagnose it with the same remedy.
+// format error". Dispatch must diagnose it with the remedy doctor gives: this
+// is the entry a release install left behind, so it has a manifest and the
+// repair is the recorded source with its options, not a bare name.
 func TestMaybeRunPlugin_EmptyManagedEntryOnPathReportsARemedy(t *testing.T) { //nolint:paralleltest // isolates PATH and managed plugins
 	withIsolatedPluginEnv(t)
 	interceptVersionCheck(t)
@@ -338,6 +342,11 @@ func TestMaybeRunPlugin_EmptyManagedEntryOnPathReportsARemedy(t *testing.T) { //
 	}
 	entry := filepath.Join(binDir, pluginBinaryName("graph"))
 	if err := os.WriteFile(entry, nil, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := SavePluginManifest(&PluginManifest{
+		Name: "graph", RepoURL: "https://x.example/entire-graph", Tag: "v1.2.3", Pinned: true,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -352,7 +361,12 @@ func TestMaybeRunPlugin_EmptyManagedEntryOnPathReportsARemedy(t *testing.T) { //
 	if !handled || code != 1 {
 		t.Fatalf("handled=%v code=%d, want true, 1; stderr=%s", handled, code, &stderr)
 	}
-	for _, want := range []string{entry, "cannot be run", "it is an empty file", "entire plugin install graph --force"} {
+	for _, want := range []string{
+		entry,
+		"cannot be run",
+		"it is an empty file",
+		"reinstall: entire plugin install https://x.example/entire-graph --force --pin v1.2.3",
+	} {
 		if !strings.Contains(stderr.String(), want) {
 			t.Errorf("missing %q in the diagnosis: %q", want, stderr.String())
 		}

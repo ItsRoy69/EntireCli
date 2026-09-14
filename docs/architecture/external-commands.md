@@ -20,7 +20,7 @@ Rules, in order:
 
    A `graph` that is already in the [managed install directory](#managed-install-directory) but unreachable through `$PATH` — a managed dir that could not be prepended at startup — is **executed**, not offered for installation. Installing over it cannot work: an existing install needs `--force`, which the on-demand path deliberately does not pass, so prompting would spend the user's Yes and several network round-trips on a guaranteed "already installed; use --force to replace".
 
-   A managed entry that exists but **cannot be run** — a local-dev symlink whose target moved, or a directory in its place — is reported with its path and a `entire plugin install <name> --force` remedy. It is neither executed (a `fork/exec` ENOENT names a path the user never chose) nor reinstalled over: replacing a developer's deliberate symlink with a released binary is their call.
+   A managed entry that exists but **cannot be run** — a local-dev symlink whose target moved, an empty file, or a directory in its place — is reported with its path and the same repair `entire plugin doctor` gives: for a release install, a reinstall from the recorded source (`entire plugin install <url> --force`, keeping `--pin` and `--allow-unverified`); for a manifest-less local-dev entry, rebuild the target or `entire plugin remove <name>`. It is neither executed (a `fork/exec` ENOENT names a path the user never chose) nor reinstalled over: replacing a developer's deliberate symlink with a released binary is their call.
 
 ### Managed install directory
 

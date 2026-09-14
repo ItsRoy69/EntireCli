@@ -326,7 +326,7 @@ func RunPluginDoctor(ctx context.Context) ([]PluginDoctorIssue, error) {
 			if _, err := exec.LookPath(p.Path); err != nil {
 				issues = append(issues, PluginDoctorIssue{
 					Plugin:  p.Name,
-					Problem: "managed entry is a dangling or non-executable link to " + p.LinkTarget,
+					Problem: "managed entry is a non-executable link to " + p.LinkTarget,
 					Fix:     entryRepairFix(p.Name, true),
 				})
 			}
@@ -401,9 +401,12 @@ func reinstallCommand(m *PluginManifest) string {
 	return cmd
 }
 
-// entryRepairFix preserves the source and options of a release install.
-// Entries without a manifest belong to local development, so rebuilding is
-// the remedy rather than replacing them with a release from the index.
+// entryRepairFix is the remedy for a managed bin/ entry that cannot be run,
+// shared by `plugin doctor` and the dispatcher so the two never disagree. It
+// preserves the source and options of a release install; an entry without a
+// manifest belongs to local development, so rebuilding is the remedy rather
+// than replacing it with a release from the index. Empty when there is
+// nothing safe to recommend.
 func entryRepairFix(name string, reinstallFixes bool) string {
 	if !reinstallFixes {
 		return ""
@@ -476,7 +479,7 @@ func checkManagedBinaryIntegrity(m *PluginManifest) []PluginDoctorIssue {
 	}
 	entryInfo, err := os.Stat(entry.Path)
 	if err != nil {
-		return issues // unrunnable entries are reported by the entry check
+		return issues
 	}
 	if pkgInfo, err := os.Stat(binPath); err == nil && os.SameFile(entryInfo, pkgInfo) {
 		return issues
