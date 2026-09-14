@@ -934,13 +934,14 @@ func TestDataAPIServesSelectedLogin(t *testing.T) {
 		{"staging login, explicit staging host", "https://partial.to", stagingFixture.name, "", true},
 		{"staging login, explicit prod host (discovery decides)", "https://entire.io", stagingFixture.name, "", true},
 		{"no login selected", "", "", "", true},
-		{"env token prod", "", "", prodCoreURL, true},
+		// The data-API path never reads ENTIRE_TOKEN, so no fallback can act as
+		// the env-token login — whatever its environment, and even under an
+		// explicit data host.
+		{"env token prod", "", "", prodCoreURL, false},
 		{"env token staging", "", "", stagingCoreURL, false},
-		// A custom core has no environment family and never matches the
-		// production default. (A loopback env token cannot occur: ParseEnvToken
-		// requires an https aud.)
-		{"env token custom core", "", "", "https://core.acme.example", false},
 		{"env token invalid", "", "", "not-a-jwt", false},
+		{"env token invalid, explicit host", "https://entire.io", "", "not-a-jwt", false},
+		{"env token prod, explicit host", "https://entire.io", "", prodCoreURL, false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

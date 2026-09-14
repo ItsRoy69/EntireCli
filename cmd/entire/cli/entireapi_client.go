@@ -32,7 +32,7 @@ const currentRepoRefTimeout = 5 * time.Second
 // fallbacks are logged for diagnosis. Both backends expose the same /me/* paths,
 // so fn is agnostic to which client it receives.
 //
-// The fallback is taken only while the data API is in the login's environment
+// The fallback is taken only while the data API can act as the same login
 // (auth.DataAPIServesSelectedLogin); otherwise the cell error is reported.
 func runAuthenticatedActivityAPI(ctx context.Context, errW io.Writer, insecureHTTP bool, fn func(context.Context, *api.Client) error) error {
 	client, err := auth.NewEntireAPICellClient(ctx, insecureHTTP, nil)

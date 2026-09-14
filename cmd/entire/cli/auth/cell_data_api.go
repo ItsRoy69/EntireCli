@@ -307,32 +307,28 @@ func resolveCellClientSubject(ctx context.Context, insecureHTTP bool) (cellSubje
 // apex, and clusterdiscovery.selectLoginContext there would either refuse the
 // staging login or auto-select a saved prod one and render prod data.
 //
-// True when ENTIRE_API_BASE_URL is set (the user named the host, and discovery
-// validates the login against it), when no login is selected (the fallback
-// renders its own not-logged-in outcome), or when the login's core and the
-// data host are in the same environment family. A loopback or custom core has
-// no family and never matches a non-loopback data host. A set-but-invalid
-// ENTIRE_TOKEN is false: the fallback never reads the env token, so it would
-// answer from a stored login instead of surfacing the fail-closed token error.
+// False whenever ENTIRE_TOKEN is set, valid or not, and before any other
+// consideration: the data-API path never reads the env token, so a fallback
+// would act as a stored login — a different identity, and possibly a different
+// environment — or would answer from one where the token error should have
+// surfaced. Otherwise true when ENTIRE_API_BASE_URL is set (the user named the
+// host, and discovery validates the login against it), when no login is
+// selected (the fallback renders its own not-logged-in outcome), or when the
+// login's core and the data host are in the same environment family. A
+// loopback or custom core has no family and never matches a non-loopback data
+// host.
 func DataAPIServesSelectedLogin() bool {
+	if _, ok := os.LookupEnv(EnvTokenVar); ok {
+		return false
+	}
 	if _, overridden := api.BaseURLOverride(); overridden {
 		return true
 	}
-	var coreURL string
-	if raw, ok := os.LookupEnv(EnvTokenVar); ok {
-		core, _, err := ParseEnvToken(raw)
-		if err != nil {
-			return false
-		}
-		coreURL = core
-	} else {
-		c, ok, err := activeContext()
-		if err != nil || !ok {
-			return true
-		}
-		coreURL = c.CoreURL
+	c, ok, err := activeContext()
+	if err != nil || !ok {
+		return true
 	}
-	return entireDomainFamily(coreURL) == entireDomainFamily(api.BaseURL())
+	return entireDomainFamily(c.CoreURL) == entireDomainFamily(api.BaseURL())
 }
 
 // resolveDiscoveredCellSubject builds the subject for an explicitly configured

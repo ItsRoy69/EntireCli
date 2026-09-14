@@ -200,7 +200,7 @@ func runRecap(ctx context.Context, w, errW io.Writer, f *recapFlags) error {
 // failures of the data-API path itself surface — except ErrNotLoggedIn, which
 // recap tolerates, rendering and letting the server answer 401.
 //
-// The fallback is taken only while the data API is in the login's environment
+// The fallback is taken only while the data API can act as the same login
 // (auth.DataAPIServesSelectedLogin), which is true when no login is selected —
 // so the tolerant path still serves the logged-out case, while a selected
 // staging login whose refresh failed is reported rather than answered by an
