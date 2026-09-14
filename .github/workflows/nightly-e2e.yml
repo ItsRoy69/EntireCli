@@ -410,7 +410,7 @@ jobs:
                       "type": "section",
                       "text": {
                         "type": "mrkdwn",
-                        "text": ":red_circle: *Nightly install smoke failed* — a published CLI did not install or run cleanly on at least one channel/OS.\n\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run details>"
+                        "text": ":red_circle: *Install smoke failed* — a published CLI did not install or run cleanly on at least one channel/OS.\n\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run details>"
                       }
                     }
                   ]
