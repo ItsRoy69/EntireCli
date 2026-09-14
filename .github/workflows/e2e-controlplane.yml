@@ -47,8 +47,8 @@ jobs:
 
       - name: Run control-plane E2E tests
         env:
-          E2E_GH_USERNAME: ${{ secrets.E2E_GH_USERNAME }}
-          E2E_GH_PASSWORD: ${{ secrets.E2E_GH_PASSWORD }}
+          E2E_GH_USERNAME: ${{ secrets.GH_USERNAME }}
+          E2E_GH_PASSWORD: ${{ secrets.GH_PASSWORD }}
           TEST_FILTER: ${{ inputs.test }}
         run: mise run test:e2e:controlplane "$TEST_FILTER"
 
