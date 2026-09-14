@@ -185,11 +185,8 @@ func TestTargetJurisdictionRejectsBadLabel(t *testing.T) {
 }
 
 func TestNewEntireAPICellClient_RoutesThroughHomeCell(t *testing.T) {
-	t.Setenv("ENTIRE_CONFIG_DIR", t.TempDir())
-	t.Setenv("ENTIRE_API_BASE_URL", "https://entire.io")
+	isolateCellClientEnv(t, "https://entire.io")
 	t.Setenv("ENTIRE_CORE_BASE_URL_TEMPLATE", "https://fixed-core.test")
-	restore := tokenstore.UseFileBackendForTesting(filepath.Join(t.TempDir(), "tokens.json"))
-	t.Cleanup(restore)
 
 	var gotReposHost, gotAuthorization string
 	coreSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -246,12 +243,9 @@ func TestNewEntireAPICellClient_RoutesThroughHomeCell(t *testing.T) {
 }
 
 func TestNewEntireAPICellClient_KeepsDirectCellBaseURL(t *testing.T) {
-	t.Setenv("ENTIRE_CONFIG_DIR", t.TempDir())
 	const cellBase = "https://aws-us-east-2.api.entire.io"
-	t.Setenv("ENTIRE_API_BASE_URL", cellBase)
+	isolateCellClientEnv(t, cellBase)
 	t.Setenv("ENTIRE_CORE_BASE_URL_TEMPLATE", "https://fixed-core.test")
-	restore := tokenstore.UseFileBackendForTesting(filepath.Join(t.TempDir(), "tokens.json"))
-	t.Cleanup(restore)
 
 	var exchangeHit, clustersHit bool
 	coreSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -337,18 +331,20 @@ func TestResolveTargetCellBaseURL(t *testing.T) {
 	if got, err := resolveTargetCellBaseURL(ctx, &CellTarget{Jurisdiction: "eu"}, "https://aws-us-east-2.api.entire.io", "eu", catalog.URL, "login", catalog.Client()); err != nil || got != "https://eu.api.entire.io" {
 		t.Fatalf("direct cell + explicit jurisdiction: got %q, %v (want catalog-resolved eu cell)", got, err)
 	}
+	// With NO data host configured the only origin known is the login core,
+	// which is not a cell: even a loopback core is not dialed verbatim — the
+	// catalog decides, so a local-dev login lands on the cell its core
+	// advertises rather than on the core itself.
+	if got, err := resolveTargetCellBaseURL(ctx, nil, "", "eu", catalog.URL, "login", catalog.Client()); err != nil || got != "https://eu.api.entire.io" {
+		t.Fatalf("no data host: got %q, %v (want catalog-resolved cell, never the core)", got, err)
+	}
 }
 
 // TestNewEntireAPICellClient_TargetRoutesToRepoCell proves the repo-scoped path:
 // when a CellTarget names a different jurisdiction than the caller's home, the
 // client dials the TARGET cell with the login JWT — not the caller's home cell.
 func TestNewEntireAPICellClient_TargetRoutesToRepoCell(t *testing.T) {
-	t.Setenv("ENTIRE_CONFIG_DIR", t.TempDir())
-	t.Setenv("ENTIRE_API_BASE_URL", "https://entire.io")
-	t.Setenv("ENTIRE_API_AUDIENCE_TEMPLATE", "")
-	t.Setenv("ENTIRE_CORE_BASE_URL_TEMPLATE", "")
-	restore := tokenstore.UseFileBackendForTesting(filepath.Join(t.TempDir(), "tokens.json"))
-	t.Cleanup(restore)
+	isolateCellClientEnv(t, "https://entire.io")
 
 	var exchangeHit bool
 	coreSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -565,12 +561,7 @@ func TestJurisdictionToken_EnvToken(t *testing.T) {
 // is attached directly without a jurisdiction-token exchange.
 // Not parallel: manipulates env + token store.
 func TestCellClientFactory_UsesLoginJWTDirectly(t *testing.T) {
-	t.Setenv("ENTIRE_CONFIG_DIR", t.TempDir())
-	t.Setenv("ENTIRE_API_BASE_URL", "https://entire.io")
-	t.Setenv("ENTIRE_API_AUDIENCE_TEMPLATE", "")
-	t.Setenv("ENTIRE_CORE_BASE_URL_TEMPLATE", "")
-	restore := tokenstore.UseFileBackendForTesting(filepath.Join(t.TempDir(), "tokens.json"))
-	t.Cleanup(restore)
+	isolateCellClientEnv(t, "https://entire.io")
 
 	var wantLoginJWT string
 	cellSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -650,7 +641,13 @@ type envFixture struct {
 	name, coreURL, catalog string
 }
 
-func (f envFixture) coreHost() string { return strings.TrimPrefix(f.coreURL, "https://") }
+func (f envFixture) coreHost() string {
+	host, ok := hostOf(f.coreURL)
+	if !ok {
+		panic("envFixture coreURL has no host: " + f.coreURL)
+	}
+	return host
+}
 
 const (
 	prodCoreURL    = "https://us.auth.entire.io"
@@ -861,5 +858,109 @@ func TestCellClientFactory_DataHostOverrideStillDiscovers(t *testing.T) {
 	}
 	if len(rt.clusters) != 1 || rt.clusters[0].Header.Get("Authorization") != "Bearer "+stagingJWT {
 		t.Fatalf("clusters listing should carry the discovered context's JWT; requests: %d", len(rt.clusters))
+	}
+}
+
+// TestCellClientFactory_LoopbackLoginResolvesCellFromCatalog: a local-dev login
+// (core on loopback, no ENTIRE_API_BASE_URL) must reach the cell its core
+// advertises, not the core itself — the core is a login server and 404s /me/*.
+func TestCellClientFactory_LoopbackLoginResolvesCellFromCatalog(t *testing.T) {
+	configDir := isolateCellClientEnv(t, "")
+	var clustersHit int
+	core := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != clustersAPIPath {
+			http.NotFound(w, r)
+			return
+		}
+		clustersHit++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"clusters":[{"jurisdiction":"us","isDefault":true,"apiUrl":"http://127.0.0.1:8082"}]}`)
+	}))
+	defer core.Close()
+
+	svc := tokenstore.CoreKeyringService(core.URL)
+	loginJWT := makeJWT(t, fmt.Sprintf(`{"iss":%q,"home_jurisdiction":"us","exp":%d}`, core.URL, time.Now().Add(2*time.Hour).Unix()))
+	if err := tokenstore.Set(svc, "me", tokenstore.EncodeTokenWithExpiration(loginJWT, 7200)); err != nil {
+		t.Fatalf("seed token: %v", err)
+	}
+	writeActiveContext(t, configDir, "me@local", core.URL, "me", svc)
+
+	factory, err := NewEntireAPICellClientFactory(context.Background(), false)
+	if err != nil {
+		t.Fatalf("NewEntireAPICellClientFactory: %v", err)
+	}
+	got, err := factory.cellBaseURLFor(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("cellBaseURLFor: %v", err)
+	}
+	if got != "http://127.0.0.1:8082" {
+		t.Fatalf("cell base URL = %q, want the catalog's local cell, never the core %s", got, core.URL)
+	}
+	if clustersHit != 1 {
+		t.Fatalf("clusters listed %d times, want once", clustersHit)
+	}
+}
+
+// TestCellClientFactory_EnvTokenActsLikeCore: ENTIRE_TOKEN is honoured by the
+// cell path exactly as by `--to core` — used verbatim as the login, its aud
+// core's catalog consulted, no stored context or discovery needed.
+func TestCellClientFactory_EnvTokenActsLikeCore(t *testing.T) {
+	isolateCellClientEnv(t, "") // empty config dir: any stored-login path would fail "not logged in"
+	envToken := makeJWT(t, fmt.Sprintf(`{"aud":%q,"home_jurisdiction":"us","exp":%d}`, stagingCoreURL, time.Now().Add(2*time.Hour).Unix()))
+	t.Setenv(EnvTokenVar, envToken)
+	rt := &catalogTransport{coreHost: stagingFixture.coreHost(), listing: stagingFixture.catalog}
+	t.Cleanup(SetCellExchangeTransportForTest(t, rt))
+
+	factory, err := NewEntireAPICellClientFactory(context.Background(), false)
+	if err != nil {
+		t.Fatalf("NewEntireAPICellClientFactory: %v", err)
+	}
+	got, err := factory.cellBaseURLFor(context.Background(), &CellTarget{Jurisdiction: "eu"})
+	if err != nil {
+		t.Fatalf("cellBaseURLFor: %v", err)
+	}
+	if got != "https://aws-eu-west-1.api.partial.to" {
+		t.Fatalf("cell base URL = %q, want the env token's environment (staging) eu cell", got)
+	}
+	if len(rt.clusters) != 1 || rt.clusters[0].Header.Get("Authorization") != "Bearer "+envToken {
+		t.Fatalf("clusters listing must carry the env token verbatim; requests: %d", len(rt.clusters))
+	}
+}
+
+// TestDataAPIServesSelectedLogin pins when activity/recap may fall back from
+// the cell to the data API: only while both are in the same environment.
+func TestDataAPIServesSelectedLogin(t *testing.T) {
+	tests := []struct {
+		name     string
+		baseURL  string // ENTIRE_API_BASE_URL, "" = unset
+		current  string // current_context among the prod/staging fixtures, "" = none saved
+		envToken string // aud core for ENTIRE_TOKEN, "" = unset
+		want     bool
+	}{
+		{"prod login, default host", "", prodFixture.name, "", true},
+		{"staging login, default host", "", stagingFixture.name, "", false},
+		{"staging login, explicit staging host", "https://partial.to", stagingFixture.name, "", true},
+		{"staging login, explicit prod host (discovery decides)", "https://entire.io", stagingFixture.name, "", true},
+		{"no login selected", "", "", "", true},
+		{"env token prod", "", "", prodCoreURL, true},
+		{"env token staging", "", "", stagingCoreURL, false},
+		// A custom core has no environment family and never matches the
+		// production default. (A loopback env token cannot occur: ParseEnvToken
+		// requires an https aud.)
+		{"env token custom core", "", "", "https://core.acme.example", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			configDir := isolateCellClientEnv(t, tc.baseURL)
+			if tc.current != "" {
+				seedProdAndStagingContexts(t, configDir, tc.current)
+			}
+			if tc.envToken != "" {
+				t.Setenv(EnvTokenVar, makeJWT(t, fmt.Sprintf(`{"aud":%q,"exp":%d}`, tc.envToken, time.Now().Add(time.Hour).Unix())))
+			}
+			if got := DataAPIServesSelectedLogin(); got != tc.want {
+				t.Fatalf("DataAPIServesSelectedLogin() = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }

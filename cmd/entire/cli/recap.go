@@ -193,20 +193,26 @@ func runRecap(ctx context.Context, w, errW io.Writer, f *recapFlags) error {
 // resolved — recap then shows the personal side only.
 //
 // It prefers the caller's home entire-api cell (the shared client) and falls
-// back to the data API on ANY cell-client failure — the cell path is a
+// back to the data API on a cell-client failure — the cell path is a
 // best-effort upgrade, so a cell problem must never break a command that worked
 // before it existed. Expected fallbacks (region has no cell yet, not logged in)
 // are silent; unexpected ones are debug-logged (logCellClientFallback). Only
 // failures of the data-API path itself surface — except ErrNotLoggedIn, which
 // recap tolerates, rendering and letting the server answer 401.
+//
+// The one cell failure that does surface is one the data API cannot stand in
+// for: when the selected login is not in the data API's environment
+// (auth.DataAPIServesSelectedLogin), falling back would ask production about a
+// staging login, so the cell error is returned. A missing login still takes the
+// tolerant path, since no environment has been selected to stay in.
 func newRecapClient(ctx context.Context, insecureHTTP bool) (client *api.Client, repoScope, repoName string, err error) {
-	// Best-effort upgrade: on any cell failure fall back to the data API path
-	// below, which tolerates a missing login (renders, lets the server 401) so
-	// the not-logged-in case keeps working.
 	cellClient, cellErr := auth.NewEntireAPICellClient(ctx, insecureHTTP, nil)
 	if cellErr == nil {
 		repoID, repoSlug := currentRepoRef(ctx)
 		return cellClient, repoID, repoSlug, nil
+	}
+	if !errors.Is(cellErr, auth.ErrNotLoggedIn) && !auth.DataAPIServesSelectedLogin() {
+		return nil, "", "", cellErr //nolint:wrapcheck // NewEntireAPICellClient already returns contextual auth errors
 	}
 	logCellClientFallback(ctx, cellErr)
 
