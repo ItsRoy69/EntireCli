@@ -13,6 +13,7 @@ mise run test:e2e --agent codex [filter]             # Codex only
 mise run test:e2e --agent cursor [filter]            # Cursor only
 mise run test:e2e --agent factoryai-droid [filter]   # Factory AI Droid only
 mise run test:e2e --agent copilot-cli [filter]       # Copilot CLI only
+mise run test:e2e:controlplane [filter]              # control-plane commands against production (no agent)
 go build ./...                                      # compile check (no agent CLI needed)
 ```
 
@@ -24,6 +25,7 @@ go build ./...                                      # compile check (no agent CL
 e2e/
 ├── agents/       # Agent abstraction (Agent interface, tmux sessions, concurrency gates)
 ├── bootstrap/    # CI pre-test setup (auth config, warmup)
+├── controlplane/ # Control-plane tests (login, org/project/repo) with their own TestMain
 ├── entire/       # `entire` CLI wrapper (enable, explain, etc.)
 ├── exploratory/  # Experimental tests, not run by CI
 ├── tests/        # Blessed test files (run by CI)
@@ -36,6 +38,14 @@ e2e/
 - All operations go through `RepoState` (`s.RunPrompt`, `s.Git`) so they're logged to `console.log`.
 - Use the `entire` package for CLI interactions, not raw `exec.Command`.
 - Skip tests pending CLI fixes with `t.Skip("ENT-XXX: reason")`.
+
+## Control-Plane Tests
+
+`controlplane/` runs the `entire` binary against the production control plane with no coding agent involved. Its `TestMain` logs in once per run with `entire login --device`, completing GitHub sign-in and the device approval in headless Chromium (playwright-go) as the GitHub test user named by `E2E_GH_USERNAME` / `E2E_GH_PASSWORD`; every test then starts from that session. The CLI's config and token store live in a temp dir outside `e2e/artifacts/`, which CI uploads.
+
+Tests create real resources named `e2e-cp-<timestamp>` and delete them in reverse order (repo, project, org) through `t.Cleanup`. The test account may own at most three orgs, so a run that dies before cleanup needs its leftovers removed by hand.
+
+Run it with `mise run test:e2e:controlplane [filter]`; the task installs the Playwright driver and Chromium on first use.
 
 ## Adding a New Agent
 
@@ -61,6 +71,8 @@ e2e/
 | `OPENAI_API_KEY` | Required for Codex | — |
 | `COPILOT_GITHUB_TOKEN` | Required for Copilot CLI, unless a `copilot login` credential is already stored. `GH_TOKEN` and `GITHUB_TOKEN` also work — Copilot reads all three, in that order of precedence. A `gh auth login` alone is not enough: Copilot does not read gh's config. | — |
 | `E2E_KEEP_AGENT_HOME` | Set to `1` to preserve the isolated `COPILOT_HOME` a session ran under (holds Copilot's own logs) | unset |
+| `E2E_GH_USERNAME` | GitHub test user for the control-plane tests' `entire login --device` | — |
+| `E2E_GH_PASSWORD` | Password of that GitHub test user (the account must not require 2FA or device verification) | — |
 
 ## Debugging Failures
 
@@ -90,5 +102,6 @@ To diagnose: read `console.log` in the failing test's artifact directory. Compar
 
 - **`.github/workflows/e2e.yml`** runs the standard agent suite on pushes to main. Gemini remains opt-in through manual dispatch.
 - For debugging a single test, dispatch **`.github/workflows/e2e.yml`** with an agent and the optional `test` regex. An empty regex keeps the normal suite. The filter also reaches Windows when running Claude; selecting another agent skips the Windows Claude job.
+- **`.github/workflows/e2e-controlplane.yml`** runs the control-plane tests on pushes to main and on manual dispatch. Runs are serialized and never cancelled mid-flight, because the shared test account's resources are cleaned up by the test itself.
 
 The E2E workflow bootstraps agents before testing. `ci.yml` covers both checkpoint backends with the free canary; `nightly-e2e.yml` checks the published nightly installation.
