@@ -91,7 +91,7 @@ func assertDeleted(t *testing.T, dir, noun, id string) {
 // itself; the CLI exits 0 on an already-deleted ID.
 func deleteResource(t *testing.T, dir, noun, id string) {
 	t.Helper()
-	if _, stderr, err := runEntire(t, dir, noun, "delete", id, "--force"); err != nil {
+	if _, stderr, err := runEntireWithTimeout(t, dir, 30*time.Second, noun, "delete", id, "--force"); err != nil {
 		t.Errorf("cleanup: entire %s delete %s: %v\n%s", noun, id, err, stderr)
 	}
 }

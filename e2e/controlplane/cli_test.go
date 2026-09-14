@@ -6,8 +6,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/execx"
 	"github.com/entireio/cli/e2e/entire"
@@ -19,11 +21,25 @@ import (
 // progress notes such as "Cloning …" go to stderr.
 func runEntire(t *testing.T, dir string, args ...string) (stdout, stderr string, err error) {
 	t.Helper()
-	cmd := execx.NonInteractive(context.Background(), entire.BinPath(), args...)
+	return runEntireWithTimeout(t, dir, 2*time.Minute, args...)
+}
+
+func runEntireWithTimeout(t *testing.T, dir string, timeout time.Duration, args ...string) (stdout, stderr string, err error) {
+	t.Helper()
+	// Each call gets a fresh deadline, including cleanup after a timed-out step.
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	cmd := execx.NonInteractive(ctx, entire.BinPath(), args...)
+	// A git transport descendant can keep the output pipes open after the
+	// direct child is killed. Bound that wait too, so cleanup can still run.
+	cmd.WaitDelay = execx.KillWaitDelay
 	cmd.Dir = dir
 	var out, errOut bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errOut
 	err = cmd.Run()
+	if ctx.Err() != nil {
+		err = errors.Join(err, ctx.Err())
+	}
 	return out.String(), errOut.String(), err
 }
 
