@@ -274,12 +274,13 @@ func resolveActiveContextCellSubject(ctx context.Context, insecureHTTP bool) (ce
 // discovered against that host.
 //
 // Following the context makes the environment track the login the way it does
-// for `--to core`. It used to discover against api.BaseURL() unconditionally,
-// and with no override that is the production apex, so a staging (partial.to)
-// login was refused with "API host entire.io does not accept the login selected
-// by --context" and every staging cell was unreachable through the CLI
-// (COR-1634); it only failed closed because the environments share no
-// credentials. An explicit override is different: the user named a host the
+// for `--to core`. Discovering against api.BaseURL() here instead would, with
+// no override, mean the production apex: clusterdiscovery.selectLoginContext
+// checks the selected context against entire.io's trusted issuers and refuses
+// a staging (partial.to) login with "API host entire.io does not accept the
+// login selected by --context", leaving every staging cell unreachable through
+// the CLI (COR-1634) — and only failing closed because the environments share
+// no credentials. An explicit override is different: the user named a host the
 // request must reach, so its trusted-issuer document decides which saved login
 // may authenticate it rather than the selected context being trusted blindly.
 func resolveStoredCellSubject(ctx context.Context, insecureHTTP bool) (cellSubject, error) {
@@ -638,15 +639,17 @@ type clusterListingRow struct {
 	APIURL       string `json:"apiUrl"`
 }
 
-// ErrNoCellForJurisdiction signals that the caller's home jurisdiction has no
-// entire-api cell in the cluster catalog (or its row carries no apiUrl). It is
-// not fatal: callers that also have a data-API path (e.g. activity/recap) treat
-// it as "entire-api isn't serving this region yet" and fall back rather than
-// failing the command. errors.Is unwraps it from the contextual message.
+// ErrNoCellForJurisdiction signals that the requested jurisdiction — the
+// caller's home, or an explicit --jurisdiction — has no entire-api cell in the
+// login core's cluster catalog (or its row carries no apiUrl). It is not fatal:
+// callers that also have a data-API path (e.g. activity/recap) treat it as
+// "entire-api isn't serving this region yet" and fall back rather than failing
+// the command. errors.Is unwraps it from the contextual message, which names
+// the core consulted and the jurisdictions it does serve.
 var ErrNoCellForJurisdiction = errors.New("no entire-api cell configured for jurisdiction")
 
-// resolveCellAPIBaseURL is the home-jurisdiction fallback cell resolver: it
-// lists the caller's clusters and picks the apiUrl for `jurisdiction` (default
+// resolveCellAPIBaseURL is the catalog cell resolver: it lists the clusters of
+// the login core at coreURL and picks the apiUrl for `jurisdiction` (default
 // cluster first). It hand-parses GET /api/v1/clusters rather than reusing the
 // generated coreapi.ListClusters() because coreapi imports this (auth) package,
 // so auth cannot import coreapi without a cycle — the repo-scoped path avoids

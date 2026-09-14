@@ -644,8 +644,8 @@ func (c *catalogTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 	}, nil
 }
 
-// envFixture is one saved login environment: the context name, its core, its
-// core's cluster catalog, and (once seeded) its login JWT.
+// envFixture is one saved login environment: the context name, its core, and
+// its core's cluster catalog.
 type envFixture struct {
 	name, coreURL, catalog string
 }
@@ -689,10 +689,10 @@ func seedProdAndStagingContexts(t *testing.T, configDir, current string) (prodJW
 }
 
 // isolateCellClientEnv pins every knob that steers cell routing: baseURL is
-// the ENTIRE_API_BASE_URL to set ("" = unset, the default that used to win
-// over the selected context), templates and env token cleared, a fresh config
-// dir and token store. With no data-host override the discovery seam FAILS the
-// test if consulted — there is nothing to discover against.
+// the ENTIRE_API_BASE_URL to set ("" = unset, so the production default must
+// not stand in for the selected context), templates and env token cleared, a
+// fresh config dir and token store. With no data-host override the discovery
+// seam FAILS the test if consulted — there is nothing to discover against.
 func isolateCellClientEnv(t *testing.T, baseURL string) string {
 	t.Helper()
 	configDir := t.TempDir()
@@ -715,13 +715,12 @@ func isolateCellClientEnv(t *testing.T, baseURL string) string {
 	return configDir
 }
 
-// TestCellClientFactory_CellBaseURLFollowsSelectedContext is the regression for
-// COR-1634: `entire api --to cell` / `-j <slug>` resolved the cell from the
-// DEFAULT data host (entire.io) and so always aimed at production, erroring
-// when the selected login was a staging (partial.to) one. The cell apiUrl must
-// come from the cluster catalog of the SELECTED context's core — current,
-// $ENTIRE_CONTEXT, or --context — for both prod and staging; prod behaviour is
-// unchanged. Not parallel: env + process-wide context override.
+// TestCellClientFactory_CellBaseURLFollowsSelectedContext pins COR-1634: the
+// cell apiUrl for `entire api --to cell` / `-j <slug>` must come from the
+// cluster catalog of the SELECTED context's core — current, $ENTIRE_CONTEXT, or
+// --context — for prod and staging alike. Resolving it from the default data
+// host (entire.io) aims every login at production and refuses a staging
+// (partial.to) one outright. Not parallel: env + process-wide context override.
 func TestCellClientFactory_CellBaseURLFollowsSelectedContext(t *testing.T) {
 	prod, staging := prodFixture.name, stagingFixture.name
 	tests := []struct {
