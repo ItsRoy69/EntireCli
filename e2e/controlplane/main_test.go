@@ -50,6 +50,16 @@ func TestMain(m *testing.M) {
 		fmt.Fprintf(os.Stderr, "preflight: create state dir: %v\n", err)
 		os.Exit(1)
 	}
+	// Playwright derives its browser directory from XDG_CACHE_HOME on Linux,
+	// so pin it to the real user cache before that variable is redirected.
+	if os.Getenv("PLAYWRIGHT_BROWSERS_PATH") == "" {
+		userCache, err := os.UserCacheDir()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "preflight: user cache dir: %v\n", err)
+			os.Exit(1)
+		}
+		os.Setenv("PLAYWRIGHT_BROWSERS_PATH", filepath.Join(userCache, "ms-playwright"))
+	}
 	os.Setenv("ENTIRE_TOKEN_STORE", "file")
 	os.Setenv("ENTIRE_TOKEN_STORE_PATH", filepath.Join(stateDir, "tokens.json"))
 	os.Setenv("ENTIRE_CONFIG_DIR", filepath.Join(stateDir, "entire-config"))
