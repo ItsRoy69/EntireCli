@@ -62,6 +62,10 @@ func newAPICmd() *cobra.Command {
 			"  --to cell   your home entire-api cell: /me/* activity, repo aggregates\n\n" +
 			"Use --jurisdiction <slug> (e.g. us, eu) to reach a specific jurisdiction's\n" +
 			"entire-api cell instead of your home one; it implies --to cell.\n\n" +
+			"Both backends act as the selected login (--context, else $ENTIRE_CONTEXT,\n" +
+			"else the active context), so a staging login reaches staging's core and\n" +
+			"cells. The cell host comes from that environment's cluster listing; an\n" +
+			"explicit ENTIRE_API_BASE_URL names the data host directly instead.\n\n" +
 			"<path> is the full path on that host, e.g. /api/v1/clusters. These\n" +
 			"placeholders are filled from the current repo's origin remote:\n" +
 			"  {owner} {repo}   the GitHub owner / repo\n" +

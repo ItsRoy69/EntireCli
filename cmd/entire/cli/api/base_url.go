@@ -53,11 +53,24 @@ func RejectRemovedAuthEnv() error {
 // BaseURL returns the effective Entire API base URL.
 // ENTIRE_API_BASE_URL takes precedence over the production default.
 func BaseURL() string {
-	if raw := strings.TrimSpace(os.Getenv(BaseURLEnvVar)); raw != "" {
-		return normalizeBaseURL(raw)
+	if raw, ok := BaseURLOverride(); ok {
+		return raw
 	}
 
 	return DefaultBaseURL
+}
+
+// BaseURLOverride returns the normalized ENTIRE_API_BASE_URL and true when the
+// user pointed the CLI at an explicit data host, or ("", false) when BaseURL()
+// would fall back to the production default. Callers that must not let the
+// production default stand in for a choice the user never made — the cell
+// path, which otherwise follows the selected login context — branch on it.
+func BaseURLOverride() (string, bool) {
+	raw := strings.TrimSpace(os.Getenv(BaseURLEnvVar))
+	if raw == "" {
+		return "", false
+	}
+	return normalizeBaseURL(raw), true
 }
 
 // ResolveURLFromBase joins an API-relative path against an explicit base URL.

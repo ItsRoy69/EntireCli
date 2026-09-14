@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -639,5 +640,250 @@ func TestCellClientFactory_UsesLoginJWTDirectly(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusNoContent)
+	}
+}
+
+// catalogTransport serves GET /api/v1/clusters for one core host from a canned
+// listing and 404s everything else, recording every request it sees. It stands
+// in for a real (https) core so the context-following cell path can be tested
+// with production-shaped context CoreURLs instead of loopback httptest URLs —
+// a loopback CoreURL is kept verbatim as the cell and never reaches the catalog.
+type catalogTransport struct {
+	coreHost string
+	listing  string
+	reqs     []*http.Request
+}
+
+func (c *catalogTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	c.reqs = append(c.reqs, req)
+	if req.URL.Host == c.coreHost && req.URL.Path == clustersAPIPath {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(c.listing)),
+			Request:    req,
+		}, nil
+	}
+	return &http.Response{StatusCode: http.StatusNotFound, Body: io.NopCloser(strings.NewReader("")), Request: req}, nil
+}
+
+func (c *catalogTransport) clustersRequests() []*http.Request {
+	var out []*http.Request
+	for _, r := range c.reqs {
+		if r.URL.Path == clustersAPIPath {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+const (
+	prodCoreURL    = "https://us.auth.entire.io"
+	stagingCoreURL = "https://us.auth.partial.to"
+
+	prodCatalog = `{"clusters":[` +
+		`{"slug":"pedigree","jurisdiction":"us","isDefault":true,"apiUrl":"https://aws-us-east-2.api.entire.io"},` +
+		`{"slug":"whiskas","jurisdiction":"eu","isDefault":true,"apiUrl":"https://aws-eu-west-1.api.entire.io"}]}`
+	stagingCatalog = `{"clusters":[` +
+		`{"slug":"royalcanin","jurisdiction":"us","isDefault":true,"apiUrl":"https://aws-us-west-2.api.partial.to"},` +
+		`{"slug":"eukanuba","jurisdiction":"eu","isDefault":true,"apiUrl":"https://aws-eu-west-1.api.partial.to"}]}`
+)
+
+// seedProdAndStagingContexts saves a prod (entire.io) and a staging (partial.to)
+// login context with `current` as current_context, each with a fresh login JWT
+// in the token store, and returns both JWTs.
+func seedProdAndStagingContexts(t *testing.T, configDir, current string) (prodJWT, stagingJWT string) {
+	t.Helper()
+	prodSvc := tokenstore.CoreKeyringService(prodCoreURL)
+	stagingSvc := tokenstore.CoreKeyringService(stagingCoreURL)
+	prodJWT = makeJWT(t, fmt.Sprintf(`{"iss":%q,"home_jurisdiction":"us","exp":%d}`, prodCoreURL, time.Now().Add(2*time.Hour).Unix()))
+	stagingJWT = makeJWT(t, fmt.Sprintf(`{"iss":%q,"home_jurisdiction":"us","exp":%d}`, stagingCoreURL, time.Now().Add(2*time.Hour).Unix()))
+	for _, s := range []struct{ svc, jwt string }{{prodSvc, prodJWT}, {stagingSvc, stagingJWT}} {
+		if err := tokenstore.Set(s.svc, "me", tokenstore.EncodeTokenWithExpiration(s.jwt, 7200)); err != nil {
+			t.Fatalf("seed token: %v", err)
+		}
+	}
+	f := &contexts.File{CurrentContext: current, Contexts: []*contexts.Context{
+		{Name: "me@entire", CoreURL: prodCoreURL, Handle: "me", KeychainService: prodSvc},
+		{Name: "me@partial", CoreURL: stagingCoreURL, Handle: "me", KeychainService: stagingSvc},
+	}}
+	if err := contexts.Save(configDir, f); err != nil {
+		t.Fatalf("save contexts: %v", err)
+	}
+	return prodJWT, stagingJWT
+}
+
+// isolateCellClientEnv clears every knob that could steer cell routing away
+// from the selected context: no ENTIRE_API_BASE_URL (the bug was the default
+// data host winning), no templates, no env token, and a discovery seam that
+// FAILS the test if consulted — with no data-host override there is nothing
+// to discover against.
+func isolateCellClientEnv(t *testing.T) string {
+	t.Helper()
+	configDir := t.TempDir()
+	t.Setenv("ENTIRE_CONFIG_DIR", configDir)
+	t.Setenv("ENTIRE_API_BASE_URL", "")
+	t.Setenv("ENTIRE_API_AUDIENCE_TEMPLATE", "")
+	t.Setenv("ENTIRE_CORE_BASE_URL_TEMPLATE", "")
+	t.Setenv("ENTIRE_CONTEXT", "")
+	t.Setenv(EnvTokenVar, "")
+	t.Cleanup(tokenstore.UseFileBackendForTesting(filepath.Join(t.TempDir(), "tokens.json")))
+	t.Cleanup(SetResolveContextForCellAPIForTest(t, func(_ context.Context, _, _, host string, _ *http.Client, _ clusterdiscovery.DebugFunc) (*contexts.Context, error) {
+		t.Errorf("data-host discovery against %q must not run when ENTIRE_API_BASE_URL is unset; the cell path follows the selected context", host)
+		return nil, errors.New("unexpected discovery")
+	}))
+	return configDir
+}
+
+// TestCellClientFactory_CellBaseURLFollowsSelectedContext is the regression for
+// COR-1634: `entire api --to cell` / `-j <slug>` resolved the cell from the
+// DEFAULT data host (entire.io) and so always aimed at production, erroring
+// when the selected login was a staging (partial.to) one. The cell apiUrl must
+// come from the cluster catalog of the SELECTED context's core — current,
+// $ENTIRE_CONTEXT, or --context — for both prod and staging; prod behaviour is
+// unchanged. Not parallel: env + process-wide context override.
+func TestCellClientFactory_CellBaseURLFollowsSelectedContext(t *testing.T) {
+	tests := []struct {
+		name         string
+		current      string
+		envContext   string
+		flagContext  string
+		jurisdiction string // "" = home
+		wantCoreHost string
+		wantCell     string
+	}{
+		{"prod current, home cell", "me@entire", "", "", "", "us.auth.entire.io", "https://aws-us-east-2.api.entire.io"},
+		{"prod current, -j eu", "me@entire", "", "", "eu", "us.auth.entire.io", "https://aws-eu-west-1.api.entire.io"},
+		{"staging current, home cell", "me@partial", "", "", "", "us.auth.partial.to", "https://aws-us-west-2.api.partial.to"},
+		{"staging current, -j us", "me@partial", "", "", "us", "us.auth.partial.to", "https://aws-us-west-2.api.partial.to"},
+		{"staging current, -j eu", "me@partial", "", "", "eu", "us.auth.partial.to", "https://aws-eu-west-1.api.partial.to"},
+		{"prod current, $ENTIRE_CONTEXT staging", "me@entire", "me@partial", "", "", "us.auth.partial.to", "https://aws-us-west-2.api.partial.to"},
+		{"prod current, --context staging, -j eu", "me@entire", "", "me@partial", "eu", "us.auth.partial.to", "https://aws-eu-west-1.api.partial.to"},
+		{"staging current, --context prod", "me@partial", "", "me@entire", "", "us.auth.entire.io", "https://aws-us-east-2.api.entire.io"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			configDir := isolateCellClientEnv(t)
+			prodJWT, stagingJWT := seedProdAndStagingContexts(t, configDir, tc.current)
+			if tc.envContext != "" {
+				t.Setenv("ENTIRE_CONTEXT", tc.envContext)
+			}
+			if tc.flagContext != "" {
+				contexts.SetFlagOverrideForTest(t, tc.flagContext)
+			}
+			listing, wantJWT := prodCatalog, prodJWT
+			if tc.wantCoreHost == "us.auth.partial.to" {
+				listing, wantJWT = stagingCatalog, stagingJWT
+			}
+			rt := &catalogTransport{coreHost: tc.wantCoreHost, listing: listing}
+			t.Cleanup(SetCellExchangeTransportForTest(t, rt))
+
+			factory, err := NewEntireAPICellClientFactory(context.Background(), false)
+			if err != nil {
+				t.Fatalf("NewEntireAPICellClientFactory: %v", err)
+			}
+			var target *CellTarget
+			if tc.jurisdiction != "" {
+				target = &CellTarget{Jurisdiction: tc.jurisdiction}
+			}
+			got, err := factory.cellBaseURLFor(context.Background(), target)
+			if err != nil {
+				t.Fatalf("cellBaseURLFor: %v", err)
+			}
+			if got != tc.wantCell {
+				t.Fatalf("cell base URL = %q, want %q", got, tc.wantCell)
+			}
+			reqs := rt.clustersRequests()
+			if len(reqs) != 1 {
+				t.Fatalf("clusters listed %d times, want exactly once", len(reqs))
+			}
+			if reqs[0].URL.Host != tc.wantCoreHost {
+				t.Errorf("clusters listed at %q, want the selected context's core %q", reqs[0].URL.Host, tc.wantCoreHost)
+			}
+			if got := reqs[0].Header.Get("Authorization"); got != "Bearer "+wantJWT {
+				t.Errorf("clusters Authorization = %q, want the selected context's login JWT", got)
+			}
+		})
+	}
+}
+
+// TestCellClientFactory_UnknownJurisdictionNamesEnvironment: `-j` naming a
+// jurisdiction the selected environment has no cell for fails with an error
+// that says which core was consulted and which jurisdictions it does serve, and
+// still unwraps to ErrNoCellForJurisdiction for callers that fall back on it.
+func TestCellClientFactory_UnknownJurisdictionNamesEnvironment(t *testing.T) {
+	configDir := isolateCellClientEnv(t)
+	seedProdAndStagingContexts(t, configDir, "me@partial")
+	rt := &catalogTransport{coreHost: "us.auth.partial.to", listing: `{"clusters":[` +
+		`{"slug":"royalcanin","jurisdiction":"us","isDefault":true,"apiUrl":"https://aws-us-west-2.api.partial.to"},` +
+		`{"slug":"pal","jurisdiction":"au","isDefault":true,"apiUrl":"https://aws-ap-southeast-2.api.partial.to"}]}`}
+	t.Cleanup(SetCellExchangeTransportForTest(t, rt))
+
+	factory, err := NewEntireAPICellClientFactory(context.Background(), false)
+	if err != nil {
+		t.Fatalf("NewEntireAPICellClientFactory: %v", err)
+	}
+	_, err = factory.cellBaseURLFor(context.Background(), &CellTarget{Jurisdiction: "eu"})
+	if err == nil {
+		t.Fatal("expected an error for a jurisdiction with no cell")
+	}
+	if !errors.Is(err, ErrNoCellForJurisdiction) {
+		t.Errorf("error does not unwrap to ErrNoCellForJurisdiction: %v", err)
+	}
+	for _, want := range []string{`"eu"`, stagingCoreURL, "au, us"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error missing %q:\n%s", want, err)
+		}
+	}
+}
+
+// TestCellClientFactory_NoActiveContextIsNotLoggedIn: with no ENTIRE_API_BASE_URL
+// and no selected login, the cell path reports "not logged in" exactly as
+// `--to core` does, instead of discovering a login against the production host.
+func TestCellClientFactory_NoActiveContextIsNotLoggedIn(t *testing.T) {
+	isolateCellClientEnv(t)
+	_, err := NewEntireAPICellClientFactory(context.Background(), false)
+	if !errors.Is(err, ErrNotLoggedIn) {
+		t.Fatalf("err = %v, want ErrNotLoggedIn", err)
+	}
+}
+
+// TestCellClientFactory_DataHostOverrideStillDiscovers: an explicit
+// ENTIRE_API_BASE_URL is the user pointing the CLI at a data host, so the
+// discovery path (trusted-issuer validation against THAT host) is kept.
+func TestCellClientFactory_DataHostOverrideStillDiscovers(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("ENTIRE_CONFIG_DIR", configDir)
+	t.Setenv("ENTIRE_API_BASE_URL", "https://partial.to")
+	t.Setenv("ENTIRE_CONTEXT", "")
+	t.Setenv(EnvTokenVar, "")
+	t.Cleanup(tokenstore.UseFileBackendForTesting(filepath.Join(t.TempDir(), "tokens.json")))
+	_, stagingJWT := seedProdAndStagingContexts(t, configDir, "me@entire")
+
+	discoveredHost := ""
+	stagingSvc := tokenstore.CoreKeyringService(stagingCoreURL)
+	t.Cleanup(SetResolveContextForCellAPIForTest(t, func(_ context.Context, _, _, host string, _ *http.Client, _ clusterdiscovery.DebugFunc) (*contexts.Context, error) {
+		discoveredHost = host
+		return &contexts.Context{Name: "me@partial", CoreURL: stagingCoreURL, Handle: "me", KeychainService: stagingSvc}, nil
+	}))
+	rt := &catalogTransport{coreHost: "us.auth.partial.to", listing: stagingCatalog}
+	t.Cleanup(SetCellExchangeTransportForTest(t, rt))
+
+	factory, err := NewEntireAPICellClientFactory(context.Background(), false)
+	if err != nil {
+		t.Fatalf("NewEntireAPICellClientFactory: %v", err)
+	}
+	if discoveredHost != "partial.to" {
+		t.Fatalf("discovery ran against %q, want the overridden data host partial.to", discoveredHost)
+	}
+	got, err := factory.cellBaseURLFor(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("cellBaseURLFor: %v", err)
+	}
+	if got != "https://aws-us-west-2.api.partial.to" {
+		t.Fatalf("cell base URL = %q, want the discovered context's us cell", got)
+	}
+	if reqs := rt.clustersRequests(); len(reqs) != 1 || reqs[0].Header.Get("Authorization") != "Bearer "+stagingJWT {
+		t.Fatalf("clusters listing should carry the discovered context's JWT; requests: %d", len(reqs))
 	}
 }
