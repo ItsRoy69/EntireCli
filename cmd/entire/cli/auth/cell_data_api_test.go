@@ -940,6 +940,7 @@ func TestDataAPIServesSelectedLogin(t *testing.T) {
 		// production default. (A loopback env token cannot occur: ParseEnvToken
 		// requires an https aud.)
 		{"env token custom core", "", "", "https://core.acme.example", false},
+		{"env token invalid", "", "", "not-a-jwt", false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -947,7 +948,10 @@ func TestDataAPIServesSelectedLogin(t *testing.T) {
 			if tc.current != "" {
 				seedProdAndStagingContexts(t, configDir, tc.current)
 			}
-			if tc.envToken != "" {
+			switch {
+			case tc.envToken == "not-a-jwt":
+				t.Setenv(EnvTokenVar, tc.envToken)
+			case tc.envToken != "":
 				t.Setenv(EnvTokenVar, makeJWT(t, fmt.Sprintf(`{"aud":%q,"exp":%d}`, tc.envToken, time.Now().Add(time.Hour).Unix())))
 			}
 			if got := DataAPIServesSelectedLogin(); got != tc.want {

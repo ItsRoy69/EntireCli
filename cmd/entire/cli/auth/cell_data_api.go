@@ -311,7 +311,9 @@ func resolveCellClientSubject(ctx context.Context, insecureHTTP bool) (cellSubje
 // validates the login against it), when no login is selected (the fallback
 // renders its own not-logged-in outcome), or when the login's core and the
 // data host are in the same environment family. A loopback or custom core has
-// no family and never matches a non-loopback data host.
+// no family and never matches a non-loopback data host. A set-but-invalid
+// ENTIRE_TOKEN is false: the fallback never reads the env token, so it would
+// answer from a stored login instead of surfacing the fail-closed token error.
 func DataAPIServesSelectedLogin() bool {
 	if _, overridden := api.BaseURLOverride(); overridden {
 		return true
@@ -320,7 +322,7 @@ func DataAPIServesSelectedLogin() bool {
 	if raw, ok := os.LookupEnv(EnvTokenVar); ok {
 		core, _, err := ParseEnvToken(raw)
 		if err != nil {
-			return true // the cell path already failed on it; let the fallback report
+			return false
 		}
 		coreURL = core
 	} else {

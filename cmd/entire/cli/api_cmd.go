@@ -64,7 +64,7 @@ func newAPICmd() *cobra.Command {
 			"entire-api cell instead of your home one; it implies --to cell.\n\n" +
 			"Both backends act as ENTIRE_TOKEN when set, else the selected login\n" +
 			"(--context, else $ENTIRE_CONTEXT, else the active context), so a staging\n" +
-			"login reaches staging's core and cells. The cell host comes from that\n" +
+			"login reaches staging's control plane and cells. The cell host comes from\n" +
 			"environment's cluster listing; an explicit ENTIRE_API_BASE_URL names the\n" +
 			"data host directly instead.\n\n" +
 			"<path> is the full path on that host, e.g. /api/v1/clusters. These\n" +
