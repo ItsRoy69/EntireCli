@@ -15,12 +15,12 @@ import (
 
 // newRepoCmd is the `entire repo` command group: control-plane
 // repository lifecycle (create, list within a project, get, delete), the
-// `mirror` and `visibility` subtrees, plus the `clone` convenience that
-// resolves a mirror and shells out to `git clone`. Other git content
-// operations (log, diff, …) remain intentionally out of scope here.
+// `mirror`, `visibility` and `protection` subtrees, plus the `clone`
+// convenience that resolves a mirror and shells out to `git clone`. Other git
+// content operations (log, diff, …) remain intentionally out of scope here.
 func newRepoCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "repo",
+		Use:   cmdRepo,
 		Short: "Manage Entire repositories",
 	}
 	addControlPlaneFlags(cmd)
@@ -31,12 +31,13 @@ func newRepoCmd() *cobra.Command {
 	cmd.AddCommand(newRepoCloneCmd())
 	cmd.AddCommand(newRepoMirrorCmd())
 	cmd.AddCommand(newRepoVisibilityCmd())
+	cmd.AddCommand(newRepoProtectionCmd())
 	return cmd
 }
 
 // repoColumns is the human table/field view of a repo, shared by list and
 // get. CLUSTER/STATE come from optional fields, shown as "-" when unset.
-var repoColumns = []string{"ID", "NAME", "PROJECT", "CLUSTER", "STATE"}
+var repoColumns = []string{"ID", colHeaderName, "PROJECT", colHeaderCluster, "STATE"}
 
 func repoRow(r coreapi.Repo) []string {
 	return []string{r.ID, r.Name, r.OwningProjectId, r.ClusterHost.Or("-"), r.State.Or("-")}
@@ -128,7 +129,7 @@ func newRepoCreateCmd() *cobra.Command {
 		objectFormat string
 	)
 	cmd := &cobra.Command{
-		Use:   "create <name>",
+		Use:   cmdCreateName,
 		Short: "Create a repository in a project",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -307,7 +308,7 @@ func newRepoGetCmd() *cobra.Command {
 	var project string
 	cmd := &cobra.Command{
 		Use:   "get <repo>",
-		Short: "Show a repository by name or ULID",
+		Short: "Show a repository by /et/<project>/<repo> path, name, or ULID",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runCoreObject(cmd, repoDetailColumns, repoDetailRow, func(ctx context.Context, c *coreapi.Client) (*coreapi.Repo, error) {
@@ -328,7 +329,7 @@ func newRepoDeleteCmd() *cobra.Command {
 	var project string
 	cmd := &cobra.Command{
 		Use:   "delete <repo>",
-		Short: "Delete a repository by name or ULID",
+		Short: "Delete a repository by /et/<project>/<repo> path, name, or ULID",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runControlPlaneDelete(cmd, "repo", args[0],
@@ -448,8 +449,52 @@ func newRepoVisibilitySetCmd() *cobra.Command {
 }
 
 // bindRepoProjectFlag wires the shared --project scope used to resolve a repo
-// addressed by name (a repo name is unique only within its project). Ignored
-// when the repo arg is already a ULID.
+// addressed by a BARE NAME. That is the only form it serves: a repo name is
+// unique only within its project, and the control plane has no by-name route
+// that is not project-scoped (ListProjectRepos takes the project as a path
+// segment), so without the flag a bare name is not an address at all.
+//
+// The other two spellings carry their own project, so the flag cannot change
+// what they resolve to — and the two used to disagree about saying so. A
+// /et/<project>/<repo> path is checked for agreement by resolveRepoPathRef,
+// which costs nothing because it resolves that project anyway. A ULID
+// short-circuits resolveRepoRef before projectRef is ever read, so a flatly
+// wrong project was accepted in silence; warnRedundantProjectFlag is what ends
+// that.
 func bindRepoProjectFlag(cmd *cobra.Command, project *string) {
-	cmd.Flags().StringVar(project, "project", "", "Owning project (name or ULID); required when <repo> is a name")
+	cmd.Flags().StringVar(project, "project", "", "Owning project (name or ULID); required when <repo> is a bare name, redundant with a /"+nativeCloneForge+"/<project>/<repo> path or a ULID")
+	warnRedundantProjectFlag(cmd, project)
+}
+
+// warnRedundantProjectFlag reports on stderr that --project cannot affect the
+// lookup, when the ref identifies the repo on its own.
+//
+// It WARNS rather than refusing because addressing a repo by ULID with an
+// unconditional --project has been accepted since the flag shipped (ece9fb3dc,
+// June 2026) and is plausibly scripted; breaking that to report a flag that was
+// already being ignored is a poor trade. It does not VALIDATE because that
+// needs GetRepo's owningProjectId, an extra round trip on every command here
+// except `repo get` — which alone already fetches the repo and prints its
+// project.
+//
+// Wired as a PreRunE because the answer needs only the flag and args[0]: no
+// resolution, no network, and every command binding this flag takes the repo
+// ref as args[0]. An existing PreRunE is chained rather than clobbered, so a
+// command that grows one later does not silently lose the warning (or its own
+// hook).
+func warnRedundantProjectFlag(cmd *cobra.Command, project *string) {
+	prev := cmd.PreRunE
+	cmd.PreRunE = func(c *cobra.Command, args []string) error {
+		if prev != nil {
+			if err := prev(c, args); err != nil {
+				return err
+			}
+		}
+		// Changed(), not a non-empty value: an explicit --project "" is still
+		// the user saying something, and reporting it is the point.
+		if len(args) > 0 && c.Flags().Changed("project") && looksLikeULID(args[0]) {
+			fmt.Fprintf(c.ErrOrStderr(), "Note: --project %q is ignored — %s is a repo ULID, which identifies the repo on its own.\n", *project, args[0])
+		}
+		return nil
+	}
 }
