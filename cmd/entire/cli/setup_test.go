@@ -2519,7 +2519,7 @@ func TestEnableCmd_IdentityPreflightOrdering(t *testing.T) {
 		{
 			name:        "new repo skip initial commit does not need identity",
 			newRepo:     true,
-			args:        []string{"--init-repo", "--no-github", "--skip-initial-commit", "--agent", "claude-code"},
+			args:        []string{"--init-repo", "--skip-initial-commit", "--agent", "claude-code"},
 			wantResolve: 0,
 		},
 		{name: "existing repo validates agent then resolves identity", args: []string{"--agent", "claude-code"}, wantResolve: 1},

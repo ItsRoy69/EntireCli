@@ -50,8 +50,9 @@ the commands are always runnable in every build.
   through `strategy.ResolveCallerSession`, not "which state file moved last" —
   see [Resolving the calling session](#resolving-the-calling-session).
 - `checkpoint` (aliases: `cp`, `checkpoints`): `list`, `explain`, `tokens`, `search`.
-  `explain` also takes `--repo <owner/name>`, the drill-down for a cross-repo
-  `search` hit: it reads the checkpoint from that repo's entire-api cell over
+  `explain` also takes a forge-qualified `--repo` (`gh/<owner>/<name>` or
+  `et/<project>/<name>`), the drill-down for a cross-repo `search` hit: it
+  reads the checkpoint from that repo's entire-api cell over
   HTTP (`/repos/{repo_id}/checkpoints/{id}` plus `.../transcript/raw`) rather
   than fetching git objects, so a foreign checkpoint never enters this repo's
   object store, ref namespace, or `tokens profile`. It needs a full checkpoint
@@ -447,6 +448,8 @@ out, err := cmd.CombinedOutput()
 `execx.NonInteractive` puts the child in a new session with no controlling terminal (`Setsid` on Unix, `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP` on Windows), so the child's platform terminal probe fails naturally. No env var required.
 
 `interactive.UnderTest()` returns true when `testing.Testing()` or `ENTIRE_TEST_TTY` is set — use it where code needs to skip a real-terminal operation even if `CanPromptInteractively()` returns true (e.g., opening `interactive.OpenPromptTTY()` directly inside a prompt reader).
+
+A prompt that runs Bubble Tea on a separately opened terminal (plugin confirmations, the login key prompt) must open it with `interactive.OpenPromptTTY()` and release it with `PromptTTY.Close()`, never `tea.OpenTTY()` plus a bare `Close`. Bubble Tea only gets a cancellable console reader for `os.Stdin`; on any other handle its reader loop leaves a read pending after the answer, and Go's `os.File.Close` on Windows waits for that read, which a console completes only on a keypress — the user had to press Enter twice. `PromptTTY.Close` cancels the pending read first (`CancelIoEx`, `tty_release_windows.go`); the reader then sees `io.EOF`, so the close must come after the form has returned.
 
 ### Linting and Formatting
 
@@ -1330,6 +1333,13 @@ comments at each site say which case applies:
   Those operations (`setupEntireDirectory`, `removeEntireDirectory`, the one
   `MkdirAll` of an agent's session dir in `resume.go`) legitimately use plain
   `os` calls.
+- **`Root.Link` takes two root-relative names, and `Root.Symlink` with an
+  absolute target is unusable on Windows.** `Root.Link(absPath, name)` is a
+  path escape everywhere. `Root.Symlink(absPath, name)` on Windows (Go 1.27)
+  writes the reparse target without the `\??\` prefix, so the link is created
+  but every follow fails with `ERROR_INVALID_NAME` — the 0-byte
+  `bin\entire-graph.exe` bug. See `plugin_store_windows.go` and
+  `materializeManagedEntry`.
 
 **Deliberately not rooted**, with the reason:
 

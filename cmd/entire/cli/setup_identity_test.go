@@ -502,3 +502,19 @@ func TestRecoverGitIdentity(t *testing.T) {
 		}
 	})
 }
+
+// argsMatch builds a predicate over recorded fakeRunner calls. It lived in the
+// bootstrap test file until that file's git-identity half moved here.
+func argsMatch(name string, args []string) func(fakeCall) bool {
+	return func(c fakeCall) bool {
+		if c.name != name || len(c.args) < len(args) {
+			return false
+		}
+		for i, a := range args {
+			if c.args[i] != a {
+				return false
+			}
+		}
+		return true
+	}
+}
