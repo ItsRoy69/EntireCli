@@ -46,6 +46,9 @@ the commands are always runnable in every build.
   `adopt` moves an active session from another repo or worktree into the current
   worktree and resets target-local checkpoint bookkeeping so future commits link
   to the adopted session from the new location.
+  `current` and a bare `tokens` answer "which session is running this command?"
+  through `strategy.ResolveCallerSession`, not "which state file moved last" —
+  see [Resolving the calling session](#resolving-the-calling-session).
 - `checkpoint` (aliases: `cp`, `checkpoints`): `list`, `explain`, `tokens`, `search`.
   `explain` also takes `--repo <owner/name>`, the drill-down for a cross-repo
   `search` hit: it reads the checkpoint from that repo's entire-api cell over
@@ -77,8 +80,17 @@ the commands are always runnable in every build.
 - `org`: control-plane organization management — `create`, `list`, `get`, `delete`
 - `project`: control-plane project management — `create`, `list`, `get`, `delete`
 - `repo`: control-plane repository lifecycle — `create`, `list`, `get`, `delete`,
-  `clone`, plus the `mirror` and `visibility` subtrees. Git content operations
-  (log, diff, …) are intentionally out of scope. The `mirror` subtree is
+  `clone`, plus the `mirror`, `visibility` and `protection` subtrees. Git
+  content operations (log, diff, …) are intentionally out of scope.
+  `protection` (`list`, `add [--server-side-merge-only]`, `remove`) edits a
+  native repo's branch-protection rules through core's
+  `/repos/{repoId}/branch-protection` resource: `add` and `remove` are one
+  PATCH each (`addRules` upserts by ref), never a read-modify-write of the
+  list. `add` sends `serverSideMergeOnly` only when the flag was given: the
+  server keeps an existing rule's level when it is absent, so re-adding a
+  branch without the flag never lowers it and `--server-side-merge-only=false`
+  is the explicit way down. A short branch name expands to `refs/heads/`,
+  `HEAD` and `refs/...` pass through. The `mirror` subtree is
   server-side (`create`, `list`, `get`, `remove`, `collaborators`) with one
   exception: `mirror use` repoints the *current clone's* git remote at a mirror
   (local git config only — it creates nothing server-side). Interactively it
@@ -94,11 +106,25 @@ the commands are always runnable in every build.
   Requiring the prefix is a **namesquatting** guard, not tidiness: without it,
   whichever namespace the CLI defaulted to could shadow the other, and
   `TestCloneRefAlwaysRequiresItsForgePrefix` pins that no forge-less pair
-  resolves in either parser or in the command. It holds only for *intent* —
+  resolves in either parser, in `repo clone`, or in `resolveRepoRef` — the last
+  being the surface every other repo-ref command shares. It holds only for
+  *intent* —
   lookups are already unambiguous because native rows are stored prefixed in the
   same `full_name` index (`et/<project>/<repo>`), which is why the bare-pair
   `--repo` filters on `search`/`experts`/`explain` cannot cross namespaces
   either.
+  The native `/et/<project>/<repo>` path is **not** clone-only: it is the
+  `path` the API returns, and `resolveRepoRef` accepts it for every command
+  that takes a repo ref — `get`, `delete`, the `visibility` and `protection`
+  subtrees, and `grant repo add`/`list`/`remove` (COR-1632). The other two
+  clone shapes are not: a `/gh/` mirror ref is refused there (the by-name
+  lookup resolves a project and then a repo inside it, and a mirror is in no
+  project — so a mirror is addressed by ULID), and an `entire://` URL is not
+  parsed at all. `--project` serves the **bare-name** spelling alone, because
+  the control plane has no by-name repo route that is not project-scoped; the
+  path form is checked against it for agreement, and a ULID warns that it is
+  ignored rather than validating, which would cost a `GetRepo` on every command
+  but `repo get`.
   Native names are validated client-side against the server's own rules
   (`nativeProjectRe`/`nativeRepoRe`, mirroring `normalizeName` in entiredb
   `core/resource/project_name.go`); those bounds are server parity only and buy
@@ -231,7 +257,7 @@ named `<noun>_group.go` and `<noun>_<verb>.go` respectively.
 
 ## Tech Stack
 
-- Language: Go 1.26.x
+- Language: Go 1.27.x (`go.mod` pins the 1.27.1 minimum)
 - Build tool: mise, go modules
 - Linting: golangci-lint
 
@@ -307,7 +333,9 @@ E2E tests:
 
 - `E2E_AGENT` - Agent to test with (default: `claude-code`)
 - `E2E_CLAUDE_MODEL` - Claude model to use (default: `haiku` for cost efficiency)
-- `E2E_TIMEOUT` - Timeout per prompt (default: `2m`)
+- `E2E_TIMEOUT` - Per-prompt timeout, overriding each runner's own default (e.g. `E2E_TIMEOUT=4m`)
+
+The per-prompt default is the runner's, not a single number: codex, copilot-cli and gemini use 60s, cursor 90s, opencode 2m, and claude-code, droid, pi, vogon and roger-roger impose no per-prompt bound at all — for those the scenario timeout passed to `ForEachAgent` is the only deadline. `E2E_TIMEOUT` sets a bound for every runner including those, and a per-test `agents.WithPromptTimeout(...)` overrides it. All ten resolve through `promptTimeout` in `e2e/agents/agent.go`; a runner that resolves its own is a build failure (`TestEveryRunPromptResolvesThroughPromptTimeout`). A malformed value is an error rather than a silent fall back to the default.
 
 ### Test Parallelization
 
@@ -398,12 +426,13 @@ Tests that spawn the real `entire` or `git` binary need the child to be non-inte
    it withdraws prompts from the largest agent population at once, which is a
    product decision rather than a detection fix.
 4. `CI=<non-empty-non-false>` → false.
-5. `/dev/tty` probe, plus its terminal mode → a terminal held in raw mode
-   (canonical input off) belongs to a full-screen TUI that spawned us, not to a
-   shell we can prompt: TUI git clients (lazygit, gitui, tig) run `git commit`
-   as a child while owning the screen, so the hook inherits a `/dev/tty` it
-   must not prompt on. Fails open when the mode can't be read. See
-   `interactive/rawmode_unix.go` for the rationale.
+5. Controlling-terminal probe — `/dev/tty` on Unix, `CONIN$` + `CONOUT$` on
+   Windows. A terminal held in raw mode (canonical/line input off) belongs to a
+   full-screen TUI that spawned us, not to a shell we can prompt: TUI git clients
+   (lazygit, gitui, tig) run `git commit` as a child while owning the screen, so
+   the hook inherits the same terminal it must not prompt on. The mode check
+   fails open when it cannot read the mode. See `interactive/tty_*.go` and
+   `interactive/rawmode_{unix,windows}.go` for the platform split and rationale.
 
 For subprocesses spawning the real `entire` binary (e2e, integration tests, `entire` calling itself from a hook), prefer `execx.NonInteractive` over env-var plumbing:
 
@@ -415,9 +444,9 @@ cmd.Dir = repoDir
 out, err := cmd.CombinedOutput()
 ```
 
-`execx.NonInteractive` puts the child in a new session with no controlling terminal (`Setsid` on Unix, `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP` on Windows), so the child's `/dev/tty` probe fails naturally. No env var required.
+`execx.NonInteractive` puts the child in a new session with no controlling terminal (`Setsid` on Unix, `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP` on Windows), so the child's platform terminal probe fails naturally. No env var required.
 
-`interactive.UnderTest()` returns true when `testing.Testing()` or `ENTIRE_TEST_TTY` is set — use it where code needs to skip a real-terminal operation even if `CanPromptInteractively()` returns true (e.g., reading from `/dev/tty` directly inside `askConfirmTTY`).
+`interactive.UnderTest()` returns true when `testing.Testing()` or `ENTIRE_TEST_TTY` is set — use it where code needs to skip a real-terminal operation even if `CanPromptInteractively()` returns true (e.g., opening `interactive.OpenPromptTTY()` directly inside a prompt reader).
 
 ### Linting and Formatting
 
@@ -776,6 +805,163 @@ group's `PersistentPreRunE` — ahead of doctor's own `PreRunE`, which loads
 redaction settings from `.entire/settings.json`, and ahead of `doctor logs` /
 `doctor bundle`, which read `.entire/logs` — prints the diagnosis, and stops. It
 does not auto-fix: what occupies the path may be someone's data.
+
+### Resolving the calling session
+
+`strategy.ResolveCallerSession` answers "which session is running this
+process?", degrading to "which session is current here?" only when nothing can
+identify the caller. Tiers, strongest first, each reported back as
+`SessionResolution`:
+
+1. **Identification** — the environment and process ancestry ranked
+   *together*, reporting `caller-env`, `ancestry`, or `caller-ambiguous`.
+2. **`worktree`** — the most recently active session recorded in this worktree.
+3. **`other-worktree`** — this worktree has no sessions at all, so the most
+   recent one from anywhere in the shared store.
+
+**Environment and ancestry are one tier, and a nearer owner outranks an
+environment claim.** They were two tiers, environment first, returning on any
+hit — which is wrong for nesting: an inner agent that publishes no ID of its
+own (Gemini CLI, opencode) forwards the OUTER agent's variable straight
+through, so the only claim named the outer session while the inner one sat one
+hop away in our ancestry. The resolver reported the outer session as
+`caller-env` and `IsCaller()` true — "safe to act on" — which is exactly the
+mistake the type exists to prevent. Depth is the only signal that separates
+"Codex ran me" from "Codex ran Gemini ran me", so the nearest owner wins
+wherever ancestry can rank at all. The environment's remaining job is real and
+narrower: naming a session ancestry *cannot* rank — one whose owner was never
+recorded (no turn yet), or any session on a platform that cannot introspect
+processes.
+
+`session tokens` preserves this provenance in its JSON `resolution` field and
+in text/agent-brief `Resolved:` lines (omitted for an explicit session ID).
+Ambiguous matches warn on stderr before recommendations are printed. Untracked
+callers reuse `session current`'s diagnostic; JSON and agent-brief modes leave
+stdout empty and exit non-zero rather than emitting a token report.
+
+**`caller-ambiguous` is a third outcome of that tier, and it does not satisfy
+`IsCaller()`.** The rule (`claimsRuledOut`) is that **the winner is believed
+only when no session the environment named could be nearer to us than it is.**
+A claim reached our environment, so its agent is certainly somewhere in our
+ancestry; what is unknown is where. A claim we could not place — untracked, so
+no owner to compare, or tracked with no owner recorded yet — therefore sits at
+an unmeasured depth, and unmeasured means possibly nearer. Exactly two
+exemptions: a winner at depth 0 owns our immediate parent, so nothing can be
+nearer; and a claim that IS the winner shadows nothing, which is the ordinary
+single-agent shape.
+
+Three revisions of this rule were wrong in review, each in the same direction —
+overclaiming identification — and the sequence is worth knowing because the
+next attempt will be tempted by the same shortcut:
+
+1. Environment first, returning on any hit. Wrong for nesting: the lone claim
+   named the *outer* session while the inner one sat a hop away in ancestry.
+2. Ambiguous only when several claims went unplaced. Missed the mixed case:
+   only sessions with state enter the ranking, so a tracked outer session won
+   by default while an untracked inner claim was never examined.
+3. Exempting "exactly one claim", on the reasoning that a lone claim has
+   nothing to be nearer than. True of a lone claim that *wins* — and the
+   revision assumed those were the same thing. A claim with no state cannot
+   enter the ranking at all, so a session found purely by ancestry won instead
+   and was reported as identified while the claim naming itself in our own
+   environment went unexamined.
+
+**Do not reintroduce a count-based exemption.** The question is about the
+winner, not about how many claims exist. The reported session is still the most
+useful of the candidates (a tracked one over an ID Entire knows nothing about);
+what the resolution says is whether it was identified or guessed.
+
+**The command must not narrate a guess as a fact either.** `session current`'s
+untracked diagnostic used to say "This command is running inside X session Y",
+which states an arbitrary pick as the answer when several untracked claims
+exist. It now says which sessions claim it and that the caller could not be
+determined; the diagnosis survives, the identification does not.
+
+**Tier 3 is why this exists.** `entire session current` used to collapse tiers
+2 and 3 and describe either as "the active session for the current worktree".
+Worktrees share one session store, so in a worktree with no sessions of its own
+it returned a live session belonging to a *different* worktree —
+indistinguishably from a real answer, with that worktree's path in the JSON.
+Agents read the ID back and fed it to `entire session adopt`, which moves the
+named session into the current worktree and resets its checkpoint bookkeeping:
+a wrong ID there mutates a third party's running session. The tier still
+exists, because "what has been happening in this repo" is a real question — it
+just has to say that is what it answered. `SessionResolution.IsCaller()` is the
+gate for anything that *acts* on a session rather than displaying it; only
+tier 1 passes, and then only when it resolves to `caller-env` or `ancestry`.
+
+**`IsCaller()` currently guards nothing, and that is the open half of this
+work.** `session adopt` — the command whose damage motivated the tiering, since
+it moves a session and resets its checkpoint bookkeeping — does not consult it.
+Its own checks are narrower than a most-recent guess (an explicit `--from`, and
+auto-selection scoped to that worktree's recent adoptable sessions) but none of
+them asks "is this session mine": `sessionBelongsToSourceWorktree` only checks
+that the ID and the worktree agree with each other, which the weak tiers'
+output satisfies by construction. Reaching it does not even need `session
+current`, since `adopt --from <path>` with one recent session there
+auto-adopts. Wiring the guard is a separate change with its own question to
+settle — what "mine" means for a `--from` on another machine, where ancestry
+cannot apply.
+
+**Tier 1 is per-agent and declarative.** An agent implements
+`agent.CallerSessionIdentifier` by naming the variable it publishes
+(`CallerSessionEnvVar`), and the `agent` package does the reading and
+validation — so the ID is checked with `validation.ValidateAgentSessionID` in
+one place (it becomes a path component in `ResolveSessionFile`, so an
+unvalidated one is a traversal sink), and `agent.CallerSessionEnvVars()` can
+enumerate the set. Five agents publish one: Claude Code
+(`CLAUDE_CODE_SESSION_ID`), Codex (`CODEX_SESSION_ID` — the root-session
+identity, *not* `CODEX_THREAD_ID`, which follows forks and subagent threads),
+Cursor (`CURSOR_CONVERSATION_ID`), Copilot CLI
+(`COPILOT_AGENT_SESSION_ID`), and pi (`PI_SESSION_ID`). Each was established
+against the shipped agent rather than inferred, and each resolves to the same
+ID that agent's lifecycle events report — so no translation is needed.
+
+These names are stated in four places (here, each agent's
+`CallerSessionEnvVar`, the static `agent.callerSessionEnvVars`, and
+`callerSessionEnvVarByAgent` in `agent/caller_session_test.go`); **the test
+table is the enforced copy**, so trust it if they ever diverge, and
+`TestCallerSessionEnvVars_MatchesTheRegistry` pins the static list against the
+live registry.
+
+**`CallerSessionEnvVars()` is static rather than registry-derived on purpose**,
+which looks backwards until you see the failure: its consumers are the test
+harnesses that isolate themselves from the developer's real agent session, and
+not every test binary links every agent implementation — the e2e harness links
+eight of the nine, omitting pi. A registry-derived list silently shortens to
+that binary's subset, and a missing name is not an error, it is one variable
+left set, so a real session leaks into the run and surfaces as an unrelated
+assertion failure on one machine. Registration cannot be the source of truth
+for "every name that exists". Worth knowing because a wrong name fails
+silently — it degrades to a weaker tier rather than erroring — and the guard
+test catches a newly capable agent going unlisted, not a vendor renaming a
+variable we already track.
+
+Gemini CLI and opencode publish **nothing**, and that is a finding rather than
+a gap in our table: Gemini passes its session ID to its shell executor for
+background-process bookkeeping but never into the child environment, and
+opencode's shell tool performs no environment augmentation at all. Tier 2 is
+what covers them, which is why it is not optional.
+`TestCallerSessionEnvVar_UnpublishedAgentsStayUnpublished` fails if either
+gains the capability without its variable being pinned.
+
+Two states worth distinguishing, both on tier 1:
+`ResolvedSession.Tracked == false` means the agent named a session Entire holds
+no state for — hooks are not installed, they failed, or the first turn has not
+landed (state is created at turn start). That is a diagnosis, so the ID and
+agent are reported; falling through to a weaker tier would answer a question
+nobody asked with someone else's session.
+
+Several tier-1 claims at once is the normal **nested** case, not a conflict: a
+`codex exec` run from Claude Code's shell tool inherits the outer agent's
+variables through the inner agent's process. Tracked claims are ranked by
+ancestry depth (nearest wins), then by most recent interaction when ancestry
+cannot separate them.
+
+**Tests that touch this must clear the variables**, derived from
+`agent.CallerSessionEnvVars()` rather than hand-listed. `go test` is routinely
+run from inside one of these agents, so a leaked variable makes fixture-based
+assertions pass on CI and fail on a contributor's machine.
 
 ### Settings
 
@@ -1189,9 +1375,9 @@ comments at each site say which case applies:
   statting, or removing a directory is an operation on it from the outside, which
   a root over it cannot perform. `setupEntireDirectory`, `removeEntireDirectory`,
   the `MkdirAll` behind each anchor, and the plugin index clone are all this case.
-- **Paths the user named** (`doctor bundle --out`, `api --input`) and the two
-  single fixed files `/dev/tty` and `/proc/<pid>/*`. No boundary exists to
-  enforce.
+- **Paths the user named** (`doctor bundle --out`, `api --input`) and fixed
+  platform files such as `/dev/tty`, `CONIN$`, `CONOUT$`, and `/proc/<pid>/*`.
+  No boundary exists to enforce.
 
 ### Git Operations
 
@@ -1288,6 +1474,17 @@ and `GIT_OPTIONAL_LOCKS=0` in the environment is an equivalent user-side
 mitigation. Output is byte-identical either way. The write fires on
 mtime-moved-but-content-identical files — the ordinary aftermath of an agent
 turn, a formatter, or an editor save — not on content edits.
+
+**The flag does not disable the equivalent refresh in worktree-comparing `git
+diff`.** `builtin/diff.c`'s `refresh_index_quietly()` does not consult
+`use_optional_locks()`: measured on Git 2.50.1, both `git diff <tree> --
+<paths>` and `git --no-optional-locks diff <tree> -- <paths>` rewrote a
+stat-stale index. `git diff --cached` and a two-tree diff do not read the
+worktree and are unaffected. Hook code needing exact clean-filtered content
+uses `git hash-object`; `git diff-index` is also non-refreshing but can report a
+stat-dirty, content-identical file as changed. The source guard
+`TestGitWorktreeDiffCallSitesDoNotRefreshTheIndex` prevents the unsafe form from
+being introduced on the hook path.
 
 That refresh is git working as designed, and running `git status` is not itself
 a mistake. The reason we always drop the write is that **Entire never benefits
@@ -1664,7 +1861,7 @@ The manual-commit strategy (`manual_commit*.go`) does not modify the active bran
 - Uses the `post-rewrite` Git hook to keep local session linkage aligned after amend/rebase rewrites
 - Builds git trees in-memory using go-git plumbing APIs
 - **Location-independent transcript resolution** - transcript paths are always computed dynamically from the current repo location (via `agent.GetSessionDir` + `agent.ResolveSessionFile`), never stored in checkpoint metadata. This ensures log restore (`RestoreLogsOnly`) works after repo relocation or across machines.
-- **Token usage scoping** - `SessionState.TokenUsage` is the session-wide total used by `entire status`; `SessionState.CheckpointTokenUsage` is the pending checkpoint delta since the last condensation. Checkpoint metadata must stay scoped to `CheckpointTranscriptStart` or the pending checkpoint delta. Cursor tokens come only from stop-hook payloads, while Copilot CLI can also backfill full-session totals from `session.shutdown`. Condensation's transcript recompute runs with `subagentsDir=""` and so drops `SubagentTokens`; `withSubagentTokensFrom` refills it from the already-rescoped `state.CheckpointTokenUsage`, and the store sums it across a checkpoint's sessions via `types.AddTokenUsage` (the single token-summing primitive — do not hand-roll another; a field-by-field copy is how the nested total came to be dropped in the first place).
+- **Token usage scoping** - `SessionState.TokenUsage` is the session-wide total used by `entire status`; `SessionState.CheckpointTokenUsage` is the pending checkpoint delta since the last condensation. Checkpoint metadata must stay scoped to `CheckpointTranscriptStart` or the pending checkpoint delta. Cursor tokens come only from stop-hook payloads, while Copilot CLI can also backfill full-session totals from `session.shutdown`. Shadow-branch condensation's transcript recompute runs with `subagentsDir=""` and so drops `SubagentTokens`; `fillMissingSubagentTokensFrom` refills it from the already-rescoped `state.CheckpointTokenUsage`. A live mid-turn condensation when no shadow branch resolves instead reads the still-available subagent transcripts only when no checkpoint-scoped subagent total already exists, the agent supports that extraction, and a real subagent directory exists. It subtracts `SubagentTokensBaseline` for checkpoint metadata and keeps the cumulative snapshot on `state.TokenUsage` so the reset advances the next baseline; an empty delta stays nil. The scan is substantially more expensive for subagent-heavy sessions, so every gate is load-bearing. The store sums those scoped values across a checkpoint's sessions via `types.AddTokenUsage` (the single token-summing primitive — do not hand-roll another; a field-by-field copy is how the nested total came to be dropped in the first place).
 - Tracks session state in `.git/entire-sessions/` (shared across worktrees)
 - **Commit-to-session linking is identity-first** (`strategy/session_identity.go`): identity comes from `SessionState.Owner`, the `proclive.Identity` that `captureSessionOwner` already records on every turn start (first non-transient ancestor — proclive skips shells, `entire` itself, and the Go toolchain, so a human commit typed in the same terminal never matches). Commit hooks snapshot their own ancestry once (`proclive.CurrentAncestry`) and match every candidate against it in memory (`Ancestry.Depth`) — one hostname/boot-id/proc walk per commit, not one per session state — linking the commit to the session whose agent process is an ancestor — in any worktree (nearest ancestor wins, so a nested agent beats the outer agent that spawned it, and only a tie at equal depth falls to the latest interaction; host/boot/start-time guards defeat PID reuse and cross-machine matches; Windows cannot introspect and falls back to worktree matching). The identity match is UNIONED with the worktree-matched set, never a replacement: a commit condenses every session with pending content in its worktree. Any session matched outside its home worktree is guest-linked — whether identity-matched or selected by the pre-existing single-worktree fallback — and is condensed and linked without mutating worktree-coupled state (`BaseCommit`, shadow-branch realignment) from the foreign worktree (`isSessionHomeWorktree`). Worktree matching is always computed (it is the sole mechanism for commits with no agent ancestry): imported sessions never link, and multi-worktree ambiguity is filtered to recently-interacting sessions (15 min) before declining. This deliberately turns some former ambiguity declines into a best-candidate link; `recentSessionWindow` is a correctness tradeoff because a session in a long-running build or tool call can age out and leave the other recent worktree to win. The stderr hint naming `entire session adopt` fires only from the commit-linking path, and only when identity matching could not rescue the commit either. Under `go test`, `session.NewStateStore` and `NewStateStoreForWorktree` refuse to open outside the temp root so non-isolated tests fail loudly instead of leaking fixture sessions into a real repo.
 - **Reclaiming sessions whose agent vanished** - not every agent fires a session-end hook, and any agent can be killed before its hook runs, so a session can be left un-finalized forever. `SessionState.Owner` — the same fingerprint commit linking matches above — is captured at every turn start by `captureSessionOwner`, and `State.OwnerExited()` reports it gone via `proclive.Check`. `finalizeExitedSessions` sweeps those inside `entire status` (text and `--json`) and `entire doctor`, ending them exactly as a clean stop would. **`OwnerExited` deliberately covers IDLE as well as ACTIVE** — an agent that finishes its last turn and then quits leaves IDLE, so gating on ACTIVE alone missed the common case; only already-finalized sessions are excluded, per the shared `State.IsEnded()` predicate. Liveness is Unknown on Windows and for cross-host state, where behaviour degrades to the `StuckActiveThreshold` timeout. Because the sweep runs inside interactive commands, its eager condensing is capped by `sweepCondenseBudget` across the whole sweep: every candidate is always marked ENDED (a single atomic rename — that is what un-sticks it from `entire status`), while condensing runs only while the budget lasts, so a multi-day backlog drains over successive invocations instead of stalling one. Skipping a condense is the existing fail-open path — PostCommit retries, and `doctor` reports the session as "ended with uncondensed checkpoint data".
