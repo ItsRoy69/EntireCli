@@ -352,13 +352,21 @@ func TestResolveEntireIdentityProfile(t *testing.T) {
 func TestRecoverGitIdentity(t *testing.T) {
 	t.Parallel()
 
+	// Spelled out rather than referencing the constants: these are the exact
+	// words a blocked user reads, so an accidental edit should fail a test
+	// rather than pass one that compares a constant against itself.
+	const gitConfigTail = "Or set the identity directly:\n" +
+		"  git config --global user.name \"Your Name\"\n" +
+		"  git config --global user.email \"you@example.com\""
 	const unattendedGuidance = "Git identity is missing, and Entire authentication is required.\n" +
-		"This unattended environment cannot complete sign-in automatically.\n" +
+		"This environment has no interactive terminal, so sign-in cannot complete here.\n" +
 		"Run `entire login` in an interactive shell, then rerun `entire enable`.\n" +
-		"For unattended use, provide a valid user token in ENTIRE_TOKEN."
+		"For unattended use, provide a valid user token in ENTIRE_TOKEN.\n" +
+		gitConfigTail
 	const envTokenGuidance = "ENTIRE_TOKEN could not authenticate an Entire user profile.\n" +
 		"ENTIRE_TOKEN overrides stored logins, so automatic sign-in cannot repair this session.\n" +
-		"Fix or unset ENTIRE_TOKEN, then rerun `entire enable`."
+		"Fix or unset ENTIRE_TOKEN, then rerun `entire enable`.\n" +
+		gitConfigTail
 
 	t.Run("login once then retry same target", func(t *testing.T) {
 		t.Parallel()
@@ -380,7 +388,7 @@ func TestRecoverGitIdentity(t *testing.T) {
 				}
 				return nil
 			},
-			isUnattended: func() bool { return false },
+			canPrompt: func() bool { return true },
 		}
 		got, err := recoverGitIdentity(t.Context(), io.Discard, io.Discard, true, deps)
 		if err != nil || got != profile || calls != 2 || loginCalls != 1 {
@@ -388,21 +396,56 @@ func TestRecoverGitIdentity(t *testing.T) {
 		}
 	})
 
-	t.Run("known unattended fails with exact guidance", func(t *testing.T) {
+	t.Run("no interactive terminal fails with exact guidance", func(t *testing.T) {
 		t.Parallel()
 		deps := identityRecoveryDependencies{
 			resolve: func(context.Context) (identityProfileResult, error) {
 				return identityProfileResult{}, errEntireLoginRequired
 			},
 			login: func(context.Context, io.Writer, io.Writer, string, bool) error {
-				t.Fatal("login must not run unattended")
+				t.Fatal("login must not run without an interactive terminal")
 				return nil
 			},
-			isUnattended: func() bool { return true },
+			canPrompt: func() bool { return false },
 		}
 		_, err := recoverGitIdentity(t.Context(), io.Discard, io.Discard, false, deps)
 		if err == nil || err.Error() != unattendedGuidance {
 			t.Fatalf("error = %q, want %q", err, unattendedGuidance)
+		}
+	})
+
+	// Regression: the gate used to be IsKnownUnattended, which is deliberately
+	// permissive — CLAUDECODE is not on its list and Codex sets none of the
+	// names on it. Every agent subprocess and every headless non-CI context
+	// therefore reached deps.login, which with no terminal prints a device code
+	// and blocks for up to 15 minutes on nobody.
+	t.Run("agent subprocess with no terminal refuses instead of starting a login", func(t *testing.T) {
+		t.Parallel()
+		deps := identityRecoveryDependencies{
+			resolve: func(context.Context) (identityProfileResult, error) {
+				return identityProfileResult{}, errEntireLoginRequired
+			},
+			login: func(context.Context, io.Writer, io.Writer, string, bool) error {
+				t.Fatal("login must not start where it cannot be completed")
+				return nil
+			},
+			// What IsKnownUnattended reported for Claude Code and Codex.
+			canPrompt: func() bool { return false },
+		}
+		_, err := recoverGitIdentity(t.Context(), io.Discard, io.Discard, false, deps)
+		if err == nil || err.Error() != unattendedGuidance {
+			t.Fatalf("error = %q, want %q", err, unattendedGuidance)
+		}
+	})
+
+	// The guidance must keep offering the fix that needs no Entire account.
+	t.Run("guidance names the direct git config fix", func(t *testing.T) {
+		t.Parallel()
+		for _, guidance := range []string{unattendedIdentityGuidance, envTokenIdentityGuidance} {
+			if !strings.Contains(guidance, "git config --global user.name") ||
+				!strings.Contains(guidance, "git config --global user.email") {
+				t.Errorf("guidance omits the direct git config fix:\n%s", guidance)
+			}
 		}
 	})
 
@@ -416,7 +459,7 @@ func TestRecoverGitIdentity(t *testing.T) {
 				t.Fatal("login cannot repair ENTIRE_TOKEN")
 				return nil
 			},
-			isUnattended: func() bool { return false },
+			canPrompt: func() bool { return true },
 		}
 		_, err := recoverGitIdentity(t.Context(), io.Discard, io.Discard, false, deps)
 		if err == nil || err.Error() != envTokenGuidance {
@@ -433,7 +476,7 @@ func TestRecoverGitIdentity(t *testing.T) {
 				t.Fatal("network errors must not start login")
 				return nil
 			},
-			isUnattended: func() bool { return false },
+			canPrompt: func() bool { return true },
 		}
 		_, err := recoverGitIdentity(t.Context(), io.Discard, io.Discard, false, deps)
 		if !errors.Is(err, networkErr) {
@@ -450,8 +493,8 @@ func TestRecoverGitIdentity(t *testing.T) {
 				resolveCalls++
 				return identityProfileResult{loginServer: "https://work.example.test"}, errEntireLoginRequired
 			},
-			login:        func(context.Context, io.Writer, io.Writer, string, bool) error { return loginErr },
-			isUnattended: func() bool { return false },
+			login:     func(context.Context, io.Writer, io.Writer, string, bool) error { return loginErr },
+			canPrompt: func() bool { return true },
 		}
 		_, err := recoverGitIdentity(t.Context(), io.Discard, io.Discard, false, deps)
 		if !errors.Is(err, loginErr) || resolveCalls != 1 {

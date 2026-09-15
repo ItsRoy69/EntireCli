@@ -416,9 +416,14 @@ func parseCheckpointRemoteFlag(value string) (provider, repo string, err error) 
 	return provider, repo, nil
 }
 
-// runSetupFlow runs the first-time setup flow (agent selection + hooks + settings).
-// Shared by root command (no args), `entire configure`, and `entire enable` on fresh repos.
-func runSetupFlow(ctx context.Context, w io.Writer, opts EnableOptions) error {
+// selectAgentsForSetup is the agent-selection half of first-time setup, split
+// out so the bare-enable path can run the identity preflight between selection
+// and runEnableInteractive — which is the whole point of the split, since the
+// preflight has to sit after the user has chosen agents but before anything
+// writes hooks or settings. Kept as one implementation because the alternative
+// is two copies that drift, and it is small enough to sit under dupl's
+// threshold where lint would not notice.
+func selectAgentsForSetup(ctx context.Context, w io.Writer, opts EnableOptions) ([]agent.Agent, error) {
 	// Discover external agent plugins so they appear in agent selection.
 	// Use DiscoverAndRegisterAlways to bypass the external_agents setting —
 	// during setup the setting doesn't exist yet.
@@ -431,7 +436,17 @@ func runSetupFlow(ctx context.Context, w io.Writer, opts EnableOptions) error {
 
 	agents, err := detectOrSelectAgent(ctx, w, selectFn)
 	if err != nil {
-		return fmt.Errorf("agent selection failed: %w", err)
+		return nil, fmt.Errorf("agent selection failed: %w", err)
+	}
+	return agents, nil
+}
+
+// runSetupFlow runs the first-time setup flow (agent selection + hooks + settings).
+// Shared by root command (no args), `entire configure`, and `entire enable` on fresh repos.
+func runSetupFlow(ctx context.Context, w io.Writer, opts EnableOptions) error {
+	agents, err := selectAgentsForSetup(ctx, w, opts)
+	if err != nil {
+		return err
 	}
 
 	return runEnableInteractive(ctx, w, agents, opts)
@@ -1051,14 +1066,9 @@ func continueEnableAfterAgentValidation(
 	// First-time bare enable owns agent selection here so authentication can be
 	// placed after selection but before runEnableInteractive mutates hooks or
 	// settings.
-	external.DiscoverAndRegisterAlways(ctx)
-	var selectFn func(available []string) ([]string, error)
-	if opts.Yes {
-		selectFn = selectAllAgents
-	}
-	agents, err := detectOrSelectAgent(ctx, cmd.OutOrStdout(), selectFn)
+	agents, err := selectAgentsForSetup(ctx, cmd.OutOrStdout(), opts)
 	if err != nil {
-		return fmt.Errorf("agent selection failed: %w", err)
+		return err
 	}
 	if err := runEnableIdentityPreflight(ctx, cmd, repoRoot, needsIdentity, resolveIdentity); err != nil {
 		return err
@@ -1266,6 +1276,13 @@ func runEnableOnConfiguredRepoWithPreflight(ctx context.Context, cmd *cobra.Comm
 	}
 	usedSetupFlow := enableUsesSetupFlow(cmd, "")
 	if usedSetupFlow {
+		// Agent management runs before the strategy and checkpoint-backend
+		// writes below, which reverses the order on main. That is load-bearing,
+		// not incidental: the identity preflight is invoked from inside
+		// runManageAgentsWithPreflight, so moving the settings writes back ahead
+		// of it would persist them before authentication is known to succeed —
+		// exactly what TestEnableCmd_IdentityFailurePreservesConfiguredSettings
+		// asserts must not happen. Do not "restore" the original order.
 		if enableNeedsAgentManagement(cmd) {
 			var selectFn func(available []string) ([]string, error)
 			if opts.Yes {
