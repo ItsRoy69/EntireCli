@@ -322,17 +322,17 @@ func TestString_PatternDetection(t *testing.T) {
 	}{
 		{
 			name:  "AWS access key (entropy ~3.9, below 4.5 threshold)",
-			input: "key=AKIAYRWQG5EJLPZLBYNP",
+			input: "key=" + awsKeyFixture,
 			want:  "key=REDACTED",
 		},
 		{
 			name:  "two AWS keys separated by space produce two REDACTED tokens",
-			input: "key=AKIAYRWQG5EJLPZLBYNP AKIAYRWQG5EJLPZLBYNP",
+			input: "key=" + awsKeyFixture + " " + awsKeyFixture,
 			want:  "key=REDACTED REDACTED",
 		},
 		{
 			name:  "adjacent AWS keys without separator merge into single REDACTED",
-			input: "key=AKIAYRWQG5EJLPZLBYNPAKIAYRWQG5EJLPZLBYNP",
+			input: "key=" + awsKeyFixture + awsKeyFixture,
 			want:  "key=REDACTED",
 		},
 	}
@@ -1379,7 +1379,7 @@ func TestString_RealSecretsStillCaught(t *testing.T) {
 		},
 		{
 			name:  "AWS access key (pattern-based)",
-			input: "key=AKIAYRWQG5EJLPZLBYNP",
+			input: "key=" + awsKeyFixture,
 		},
 		{
 			name:  "GitHub personal access token",
