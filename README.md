@@ -394,7 +394,7 @@ These are visible in developer and nightly builds and hidden in stable releases,
 | `--agent-help-skill`                        | Install the Entire agent-help skill (points agents at `entire agent-help`) for the selected agent(s)              |
 | `--telemetry=false`                         | Disable anonymous usage analytics                                                                                 |
 
-Run in a directory that is not a git repository, `entire enable` offers to initialize one and (optionally) create a matching GitHub repo via the `gh` CLI. That path is driven by `--init-repo` / `--no-init-repo`, `--no-github`, `--repo-name`, `--repo-owner`, `--repo-visibility`, `--push`, `--skip-initial-commit`, and `--initial-commit-message`. See `entire enable --help` for the full list.
+Run in a directory that is not a git repository, `entire enable` offers to initialize one and make an initial commit. It is local-only — no remote is created or pushed to, so publish the repository yourself when you are ready (`gh repo create`, `entire repo create`, or your forge's web UI). That path is driven by `--init-repo` / `--no-init-repo`, `--skip-initial-commit`, and `--initial-commit-message`. See `entire enable --help` for the full list.
 
 **Examples:**
 
