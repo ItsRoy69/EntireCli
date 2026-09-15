@@ -106,34 +106,6 @@ func TestUnderTest_TrueByTestingHarness(t *testing.T) {
 	}
 }
 
-func TestIsKnownUnattended(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		name         string
-		testOverride string
-		underTest    bool
-		agent        bool
-		ci           string
-		want         bool
-	}{
-		{name: "test harness", underTest: true, want: true},
-		{name: "CI", ci: "true", want: true},
-		{name: "agent subprocess", agent: true, want: true},
-		{name: "forced interactive wins", testOverride: "1", underTest: true, agent: true, ci: "true", want: false},
-		{name: "forced noninteractive", testOverride: "0", want: true},
-		{name: "CI false is human-capable", ci: "false", want: false},
-		{name: "plain headless is not known unattended", want: false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			if got := isKnownUnattended(tt.testOverride, tt.underTest, tt.agent, tt.ci); got != tt.want {
-				t.Fatalf("isKnownUnattended() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
 func TestIsTerminalWriter_NonFile(t *testing.T) {
 	t.Parallel()
 	if IsTerminalWriter(&bytes.Buffer{}) {

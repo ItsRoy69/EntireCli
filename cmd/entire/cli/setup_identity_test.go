@@ -4,9 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/entireio/cli/cmd/entire/cli/interactive"
+	"github.com/entireio/cli/cmd/entire/cli/testutil"
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -545,5 +548,73 @@ func TestRunSetupFlow_PreflightRunsBeforeAnyWrite(t *testing.T) {
 	// TestEnableCmd_IdentityFailureLeavesSetupAbsent makes for enable.
 	if _, statErr := os.Stat(filepath.Join(repoDir, ".entire")); !os.IsNotExist(statErr) {
 		t.Fatalf(".entire exists after a failed preflight (stat err = %v)", statErr)
+	}
+}
+
+// The dependency structs above are injected in every other test in this file,
+// which means nothing here exercises what production actually wires into them.
+// That gap is not theoretical: reverting canPrompt to the old
+// IsKnownUnattended-based gate — reintroducing the headless device-login hang —
+// left the entire identity and enable test surface passing.
+//
+// Compare by function pointer rather than behaviour: the point is to pin which
+// function is wired, and a behavioural check would pass for any function that
+// happens to agree in the test environment (which IsKnownUnattended does).
+func TestDefaultIdentityDependencies_WireTheRealFunctions(t *testing.T) {
+	t.Parallel()
+
+	recovery := defaultIdentityRecoveryDependencies(false)
+	if got, want := funcPointer(recovery.canPrompt), funcPointer(interactive.CanPromptInteractively); got != want {
+		t.Errorf("canPrompt is not interactive.CanPromptInteractively; a login must never start where it cannot be completed")
+	}
+
+	profile := defaultIdentityProfileDependencies(false)
+	if got, want := funcPointer(profile.activeContext), funcPointer(cliauth.ActiveContext); got != want {
+		t.Errorf("activeContext is not cliauth.ActiveContext; the CoreURL guard lives there")
+	}
+	if got, want := funcPointer(profile.resolveLogin), funcPointer(cliauth.RefreshedLoginToken); got != want {
+		t.Errorf("resolveLogin is not cliauth.RefreshedLoginToken")
+	}
+}
+
+func funcPointer(fn any) uintptr {
+	return reflect.ValueOf(fn).Pointer()
+}
+
+// runSetupFlow must pass a real preflight, not nil. Injecting one (as
+// TestRunSetupFlow_PreflightRunsBeforeAnyWrite does) cannot catch a
+// runSetupFlow that stopped supplying it, which would silently restore the
+// unknown-author bug for bare `entire` and `entire agent`.
+//
+// Drives the default wiring end to end without a network: under `go test`
+// CanPromptInteractively is false, so recoverGitIdentity refuses with the
+// guidance before any profile fetch or login is attempted.
+func TestRunSetupFlow_UsesTheRealPreflight(t *testing.T) {
+	testutil.IsolateGitConfigEnv(t)
+	repoDir := setupTestRepo(t)
+	clearLocalGitIdentity(t, repoDir)
+
+	err := runSetupFlow(t.Context(), io.Discard, EnableOptions{})
+	if err == nil {
+		t.Fatal("runSetupFlow succeeded with no git identity; the preflight did not run")
+	}
+	if !strings.Contains(err.Error(), "git config --global user.name") {
+		t.Fatalf("error = %v, want the identity guidance", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(repoDir, ".entire")); !os.IsNotExist(statErr) {
+		t.Errorf(".entire exists after a refused preflight (stat err = %v)", statErr)
+	}
+}
+
+// A configured identity must not reach the resolver at all — this is what keeps
+// the preflight free on the overwhelmingly common path.
+func TestDefaultIdentityPreflight_NoOpWhenIdentityConfigured(t *testing.T) {
+	testutil.IsolateGitConfigEnv(t)
+	repoDir := setupTestRepo(t)
+	testutil.RunGit(t, repoDir, "config", "--local", "user.name", "Configured User")
+	testutil.RunGit(t, repoDir, "config", "--local", "user.email", "configured@example.com")
+
+	if err := defaultIdentityPreflight(t.Context(), io.Discard)(); err != nil {
+		t.Fatalf("preflight with a configured identity = %v, want nil", err)
 	}
 }
