@@ -1,5 +1,5 @@
 #!/bin/sh
-#MISE description="Run control-plane E2E tests against production (needs E2E_GH_USERNAME/E2E_GH_PASSWORD): mise run test:e2e:controlplane [filter]"
+#MISE description="Run control-plane E2E tests against production (needs E2E_GH_USERNAME, E2E_GH_PASSWORD, E2E_GH_TOTP_SECRET): mise run test:e2e:controlplane [filter]"
 #MISE quiet=true
 #USAGE arg "[filter]" help="Test name filter (regex)" default=""
 

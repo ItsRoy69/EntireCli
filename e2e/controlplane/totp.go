@@ -15,10 +15,7 @@ import (
 // lowercase and spaced groups are accepted.
 func totpCode(secret string, now time.Time) (string, error) {
 	normalized := strings.ToUpper(strings.ReplaceAll(secret, " ", ""))
-	if rem := len(normalized) % 8; rem != 0 {
-		normalized += strings.Repeat("=", 8-rem)
-	}
-	key, err := base32.StdEncoding.DecodeString(normalized)
+	key, err := base32.StdEncoding.WithPadding(base32.NoPadding).DecodeString(normalized)
 	if err != nil {
 		return "", fmt.Errorf("decode TOTP secret: %w", err)
 	}

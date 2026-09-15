@@ -130,6 +130,11 @@ func approveInBrowser(ctx context.Context, exited <-chan struct{}, approvalURL, 
 	a := &approver{page: page, code: code, username: username, password: password, totpSecret: totpSecret}
 	tick := time.NewTicker(750 * time.Millisecond)
 	defer tick.Stop()
+	// A page the stepper cannot advance (a sign-in form shown again, an
+	// authenticator prompt that reloaded without an error) is reported by
+	// name instead of surfacing as the context deadline.
+	const stallAfter = time.Minute
+	lastURL, lastChange := "", time.Now()
 	for {
 		select {
 		case <-exited:
@@ -138,10 +143,25 @@ func approveInBrowser(ctx context.Context, exited <-chan struct{}, approvalURL, 
 			return fmt.Errorf("login did not complete: %w", ctx.Err())
 		case <-tick.C:
 		}
+		if u := a.page.URL(); u != lastURL {
+			lastURL, lastChange = u, time.Now()
+		} else if time.Since(lastChange) > stallAfter {
+			return fmt.Errorf("login stalled on %s for %s", pageName(u), stallAfter)
+		}
 		if err := a.step(); err != nil {
 			return err
 		}
 	}
+}
+
+// pageName is a page URL without its query, which on the device page carries
+// the code.
+func pageName(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "an unparseable page"
+	}
+	return u.Host + u.Path
 }
 
 // approver takes one action per step on whichever page the login flow is

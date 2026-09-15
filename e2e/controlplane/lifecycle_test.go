@@ -5,6 +5,7 @@ package controlplane
 import (
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -65,18 +66,27 @@ type repoJSON struct {
 // waitForRepoClonable reads the repo by its /et/<project>/<repo> path, the
 // same lookup `repo clone` performs, until that read reports it active with
 // clone coordinates. The create response already carries them, but the read
-// path can lag behind it for a few seconds.
+// path can lag behind it for a few seconds, either as a repo that is not yet
+// active or as a by-name lookup that does not find the project or repo yet.
 func waitForRepoClonable(t *testing.T, dir, ref string) repoJSON {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Minute)
 	for {
-		stdout, _ := mustRunEntire(t, dir, "repo", "get", ref, "--json")
-		repo := decodeJSON[repoJSON](t, stdout)
-		require.NotEqual(t, "failed", repo.State, "repo %s failed to provision", ref)
-		if repo.State == "active" && repo.ClusterHost != "" && repo.Path != "" {
-			return repo
+		stdout, stderr, err := runEntire(t, dir, "repo", "get", ref, "--json")
+		var pending string
+		if err != nil {
+			require.True(t, strings.Contains(stderr, "no repo named") || strings.Contains(stderr, "no project named"),
+				"entire repo get %s --json: %v\nstdout:\n%s\nstderr:\n%s", ref, err, stdout, stderr)
+			pending = strings.TrimSpace(stderr)
+		} else {
+			repo := decodeJSON[repoJSON](t, stdout)
+			require.NotEqual(t, "failed", repo.State, "repo %s failed to provision", ref)
+			if repo.State == "active" && repo.ClusterHost != "" && repo.Path != "" {
+				return repo
+			}
+			pending = fmt.Sprintf("state %q, clusterHost %q, path %q", repo.State, repo.ClusterHost, repo.Path)
 		}
-		require.True(t, time.Now().Before(deadline), "repo %s not clonable after 2 minutes: state %q, clusterHost %q, path %q", ref, repo.State, repo.ClusterHost, repo.Path)
+		require.True(t, time.Now().Before(deadline), "repo %s not clonable after 2 minutes: %s", ref, pending)
 		time.Sleep(3 * time.Second)
 	}
 }

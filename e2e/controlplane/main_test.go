@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/entireio/cli/cmd/entire/cli/execx"
 	"github.com/entireio/cli/cmd/entire/cli/testutil/gitenv"
 	"github.com/entireio/cli/e2e/entire"
 	"github.com/entireio/cli/e2e/testutil"
@@ -102,6 +103,13 @@ func TestMain(m *testing.M) {
 	}
 
 	code := m.Run()
+	// Revoke the session on the control plane. Deleting the token file alone
+	// leaves a live login on the shared account after every run.
+	logoutCtx, cancelLogout := context.WithTimeout(context.Background(), 30*time.Second)
+	if out, err := execx.NonInteractive(logoutCtx, entireBin, "logout").CombinedOutput(); err != nil {
+		fmt.Fprintf(os.Stderr, "control-plane e2e: logout failed: %v\n%s", err, out)
+	}
+	cancelLogout()
 	_ = os.RemoveAll(stateDir)
 	os.Exit(code)
 }
