@@ -809,7 +809,7 @@ func newEnableCmd() *cobra.Command {
 	var opts EnableOptions
 	var ignoreUntracked bool
 	var agentName string
-	var bootstrapOpts GitHubBootstrapOptions
+	var bootstrapOpts BootstrapOptions
 	var insecureHTTPAuth bool
 
 	cmd := &cobra.Command{
@@ -821,7 +821,8 @@ If Entire is not yet configured, this runs the full configuration flow.
 If Entire is already configured but disabled, this re-enables it.
 
 If the current directory is not a git repository, Entire can initialize one
-for you and (optionally) create a matching GitHub repository via the gh CLI.`,
+for you and create an initial commit. It never creates or pushes to a remote —
+publish the repository yourself when you're ready.`,
 		RunE: func(cmd *cobra.Command, _ []string) (runErr error) {
 			ctx := cmd.Context()
 			// The destination report needs the choice pointer, not the answer,
@@ -831,8 +832,8 @@ for you and (optionally) create a matching GitHub repository via the gh CLI.`,
 			defer func() { opts.checkpointRemoteChoice.report(cmd.Context(), cmd.OutOrStdout(), runErr) }()
 			// Best-effort: after a successful enable, tell the backend which repo
 			// was enabled so the web onboarding reflects it (and we can warn when
-			// the GitHub App can't reach it). Runs after any bootstrap finalize that creates the
-			// GitHub repo and pushes, by which point an origin remote exists.
+			// the GitHub App can't reach it). A freshly bootstrapped repo has no
+			// origin yet, so this reports nothing until the user adds one.
 			defer func() {
 				if runErr != nil {
 					return
@@ -862,18 +863,18 @@ for you and (optionally) create a matching GitHub repository via the gh CLI.`,
 			ctx = cmd.Context()
 
 			// Check if we're in a git repository first. If not, offer to
-			// bootstrap one (git init + optional GitHub repo). If the user
-			// declines, fall back to the legacy prerequisite error.
+			// bootstrap one (git init, local only). If the user declines,
+			// fall back to the legacy prerequisite error.
 			//
 			// The bootstrap runs in two phases: phase 1 (git init + identity
-			// + gather GitHub choices) before agent setup, phase 2
-			// (initial commit + gh repo create + push) after agent setup so
-			// the initial commit captures the .entire/, .claude/, hooks, and
-			// settings files that setup writes.
+			// + the initial-commit decision) before agent setup, phase 2
+			// (the initial commit itself) after agent setup so that commit
+			// captures the .entire/, .claude/, hooks, and settings files
+			// that setup writes.
 			var bootstrap *bootstrapState
 			if _, err := paths.WorktreeRoot(ctx); err != nil {
 				bootstrapOpts.Yes = opts.Yes
-				state, bootstrapErr := runGitHubBootstrapInit(ctx, cmd.OutOrStdout(), cmd.ErrOrStderr(), bootstrapOpts)
+				state, bootstrapErr := runBootstrapInit(ctx, cmd.OutOrStdout(), bootstrapOpts)
 				if errors.Is(bootstrapErr, errBootstrapDeclined) {
 					fmt.Fprintln(cmd.ErrOrStderr(), "Not a git repository. Please run 'entire enable' from within a git repository, or pass --init-repo to initialize one here.")
 					return NewSilentError(errors.New("not a git repository"))
@@ -896,14 +897,14 @@ for you and (optionally) create a matching GitHub repository via the gh CLI.`,
 				// Visual separator between bootstrap init and agent setup.
 				printBootstrapSection(cmd.OutOrStdout(), "Enabling Entire")
 				// On the way out (if setup succeeded), create the initial
-				// commit and push to the GitHub repo. If setup returned an
-				// error, skip the finalize — the user can fix the issue and
-				// re-run; any partial state is just untracked files.
+				// commit. If setup returned an error, skip the finalize —
+				// the user can fix the issue and re-run; any partial state
+				// is just untracked files.
 				defer func() {
 					if runErr != nil || bootstrap == nil {
 						return
 					}
-					if err := runGitHubBootstrapFinalize(ctx, cmd.OutOrStdout(), bootstrap); err != nil {
+					if err := runBootstrapFinalize(ctx, cmd.OutOrStdout(), bootstrap); err != nil {
 						runErr = err
 					}
 				}()
@@ -978,24 +979,17 @@ for you and (optionally) create a matching GitHub repository via the gh CLI.`,
 	cmd.Flags().BoolVar(&opts.AbsoluteGitHookPath, flagAbsoluteGitHookPath, false, "Embed full binary path in git hooks (for GUI git clients that don't source shell profiles)")
 	cmd.Flags().BoolVar(&opts.SearchSkill, flagSearchSkill, false, "Install the optional Entire search skill for selected agent(s)")
 	cmd.Flags().BoolVar(&opts.AgentHelpSkill, flagAgentHelpSkill, false, "Install the stable Entire agent-help skill (points agents at `entire agent-help`) for selected agent(s)")
-	cmd.Flags().BoolVarP(&opts.Yes, "yes", "y", false, "Accept all defaults without prompting (in a non-repo directory: init git, create private GitHub repo, commit, and push; then enable all agents and accept telemetry). Does not import existing agent history — see --"+flagImportHistory)
+	cmd.Flags().BoolVarP(&opts.Yes, "yes", "y", false, "Accept all defaults without prompting (in a non-repo directory: init git and commit; then enable all agents and accept telemetry). Does not import existing agent history — see --"+flagImportHistory)
 	cmd.Flags().BoolVar(&opts.ImportHistory, flagImportHistory, false, importHistoryFlagUsage)
 	addInsecureHTTPAuthFlag(cmd, &insecureHTTPAuth)
 
 	// Bootstrap flags for non-git-repo folders.
 	cmd.Flags().BoolVar(&bootstrapOpts.InitRepo, "init-repo", false, "If not a git repo, initialize one non-interactively")
 	cmd.Flags().BoolVar(&bootstrapOpts.NoInitRepo, "no-init-repo", false, "If not a git repo, exit instead of prompting to initialize one")
-	cmd.Flags().StringVar(&bootstrapOpts.RepoName, "repo-name", "", "GitHub repository name for the new repo (used when bootstrapping)")
-	cmd.Flags().StringVar(&bootstrapOpts.RepoOwner, "repo-owner", "", "GitHub user or organization login for the new repo")
-	cmd.Flags().StringVar(&bootstrapOpts.RepoVisibility, "repo-visibility", "", "GitHub repository visibility: public, private, or internal")
-	cmd.Flags().BoolVar(&bootstrapOpts.NoGitHub, "no-github", false, "Initialize local git repo only; skip creating a GitHub remote")
-	cmd.Flags().BoolVar(&bootstrapOpts.Push, "push", false, "When bootstrapping a new repo, push the initial commit to the created GitHub remote (implies creating the remote; without it the repo is created but not pushed)")
 	cmd.Flags().StringVar(&bootstrapOpts.InitialCommitMessage, "initial-commit-message", "", "Commit message for the initial commit when bootstrapping a new repo")
 	cmd.Flags().BoolVar(&bootstrapOpts.SkipInitialCommit, "skip-initial-commit", false, "Don't create the initial commit when bootstrapping a new repo")
 	cmd.MarkFlagsMutuallyExclusive("init-repo", "no-init-repo")
 	cmd.MarkFlagsMutuallyExclusive("initial-commit-message", "skip-initial-commit")
-	cmd.MarkFlagsMutuallyExclusive("push", "no-github")
-	cmd.MarkFlagsMutuallyExclusive("push", "skip-initial-commit")
 
 	// Provide a helpful error when --agent is used without a value
 	defaultFlagErr := cmd.FlagErrorFunc()
