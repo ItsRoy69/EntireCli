@@ -480,15 +480,45 @@ func formatGitPushError(ctx context.Context, err error, output []byte, remote st
 		detail = strings.ReplaceAll(detail, remote, RedactURLOrPath(remote))
 	}
 	detail = strings.Join(strings.Fields(detail), " ")
-	if len(detail) > maxPushErrorDetail {
-		detail = detail[:maxPushErrorDetail] + "…"
-	}
-	return fmt.Errorf("%w (%s)", err, detail)
+	return fmt.Errorf("%w (%s)", err, elideMiddle(detail, maxPushErrorDetail))
 }
 
-// maxPushErrorDetail bounds the git output folded into a push error. Push output
-// carries progress and per-ref status lines, and the whole of it can be large;
-// the rejection reason is what matters and sits well inside this.
+// elideMiddle shortens s to at most limit runes by dropping the middle, keeping
+// both ends.
+//
+// Truncating the tail would be wrong here, which is the whole reason this is not
+// a plain slice: git prints the remote's banner first and its own verdict last,
+// so the decisive lines — "! <ref> [remote rejected] (<reason>)", "error: failed
+// to push some refs" — are at the END of the output. A head-only cut discards
+// exactly what the caller needs, and does so precisely when the output is long,
+// which is when a remote has the most to say. GitHub's push-protection block is
+// the worked example: several hundred characters of banner and unblock URLs per
+// offending secret, and only then "(push declined due to repository rule
+// violations)".
+//
+// The tail gets the larger share for that reason. The cut is rune-aware because
+// git's own output carries multi-byte characters (em dashes in GitHub banners,
+// its own "…"), and slicing bytes through one would put invalid UTF-8 into a log
+// record.
+func elideMiddle(s string, limit int) string {
+	if limit <= 0 || len([]rune(s)) <= limit {
+		return s
+	}
+	const marker = " […] "
+	budget := limit - len([]rune(marker))
+	if budget < 2 {
+		return string([]rune(s)[:limit])
+	}
+	head := budget / 3
+	tail := budget - head
+	r := []rune(s)
+	return string(r[:head]) + marker + string(r[len(r)-tail:])
+}
+
+// maxPushErrorDetail bounds the git output folded into a push error, in runes.
+// Push output carries per-secret push-protection banners and progress lines and
+// can run to several KB; this keeps the error usable as a log attribute while
+// leaving room for both ends of a long rejection.
 const maxPushErrorDetail = 2000
 
 // LsRemoteInDir is like LsRemote but runs in a specific directory.

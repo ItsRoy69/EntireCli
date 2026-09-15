@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
 
@@ -1321,8 +1322,42 @@ func TestFormatGitPushError_CollapsesAndCaps(t *testing.T) {
 
 	long := formatGitPushError(context.Background(), err, []byte(strings.Repeat("x", maxPushErrorDetail*2)), "origin")
 	require.Error(t, long)
-	assert.Less(t, len(long.Error()), maxPushErrorDetail+100)
-	assert.Contains(t, long.Error(), "…")
+	assert.Less(t, len([]rune(long.Error())), maxPushErrorDetail+100)
+	assert.Contains(t, long.Error(), "[…]")
+}
+
+// git prints the remote's banner first and its own verdict last, so a long
+// rejection must not lose its tail — that is where the reason is. This is the
+// shape of a real GitHub push-protection refusal.
+func TestFormatGitPushError_KeepsTailOfLongOutput(t *testing.T) {
+	t.Parallel()
+
+	const reason = "push declined due to repository rule violations"
+	var b strings.Builder
+	for range 40 {
+		b.WriteString("remote: GITHUB PUSH PROTECTION blocked a secret; unblock at https://github.com/o/r/security/secret-scanning/unblock-secret/xxxxxxxxxxxxxxxxxxxx ")
+	}
+	b.WriteString("! [remote rejected] refs/entire/checkpoints/W1/X -> refs/entire/checkpoints/W1/X (" + reason + ")")
+	require.Greater(t, b.Len(), maxPushErrorDetail, "precondition: output must exceed the cap")
+
+	formatted := formatGitPushError(context.Background(), &exec.ExitError{ProcessState: nil}, []byte(b.String()), "origin")
+	require.Error(t, formatted)
+	msg := formatted.Error()
+	assert.Contains(t, msg, reason, "the verdict at the tail must survive truncation")
+	assert.Contains(t, msg, "remote rejected")
+	assert.Contains(t, msg, "GITHUB PUSH PROTECTION", "the head should survive too")
+	assert.Contains(t, msg, "[…]")
+}
+
+// A cut landing inside a multi-byte rune would put invalid UTF-8 into a log
+// record. git's own output carries em dashes and ellipses.
+func TestFormatGitPushError_TruncationIsRuneSafe(t *testing.T) {
+	t.Parallel()
+
+	output := strings.Repeat("—", maxPushErrorDetail*2)
+	formatted := formatGitPushError(context.Background(), &exec.ExitError{ProcessState: nil}, []byte(output), "origin")
+	require.Error(t, formatted)
+	assert.True(t, utf8.ValidString(formatted.Error()), "truncated detail must remain valid UTF-8")
 }
 
 // Empty output leaves the original error untouched rather than adding "()".
