@@ -71,9 +71,10 @@ fails even with --dry-run.`, imp.AgentType()),
 				return fmt.Errorf("configuring redaction: %w", err)
 			}
 
-			// Logged so support can tell why an import has no anchor (empty
-			// sha: nothing resolved) or a stale one (origin tip not fetched).
-			linkCommitSHA := resolveImportLinkCommitSHA(repo)
+			linkCommitSHA, err := resolveImportLinkCommitSHA(ctx, repo)
+			if err != nil {
+				return err
+			}
 			logging.Debug(ctx, "import: resolved link commit", "commit_sha", linkCommitSHA)
 
 			progress, stopProgress := newImportProgressReporter(c.OutOrStdout(), string(imp.AgentType()))

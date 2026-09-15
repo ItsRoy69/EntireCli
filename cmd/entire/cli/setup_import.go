@@ -256,14 +256,26 @@ func runSelectedImports(ctx context.Context, w io.Writer, repoRoot string, selec
 		return
 	}
 
+	linkCommitSHA, err := resolveImportLinkCommitSHA(ctx, repo)
+	if err != nil {
+		logging.Warn(ctx, "session import skipped: no valid anchor", "error", err)
+		// The offer is first-time-setup only, so "retry" cannot mean re-running
+		// enable — name the command that can actually import later, as
+		// noteImportHistoryNotApplicable does for the same dead end.
+		fmt.Fprintf(w, "Note: skipping agent history import: %v\n", err)
+		fmt.Fprintln(w, "      Run 'entire import <agent>' once this repo has a commit to import against.")
+		return
+	}
+
 	var importedLocalHistory bool
 	for _, e := range selected {
 		progress, stopProgress := newImportProgressReporter(w, e.displayName)
 		res, err := agentimport.Run(ctx, repo, e.imp, agentimport.Options{
-			RepoRoot:    repoRoot,
-			Now:         time.Now(),
-			Progress:    progress,
-			ReadRemotes: strategy.CheckpointReadRemotes(ctx),
+			LinkCommitSHA: linkCommitSHA,
+			RepoRoot:      repoRoot,
+			Now:           time.Now(),
+			Progress:      progress,
+			ReadRemotes:   strategy.CheckpointReadRemotes(ctx),
 		})
 		stopProgress(err == nil)
 		if err != nil {

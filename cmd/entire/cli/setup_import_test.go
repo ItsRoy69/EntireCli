@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -14,6 +15,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/agentimport"
 	"github.com/entireio/cli/cmd/entire/cli/checkpointpolicy"
+	"github.com/entireio/cli/cmd/entire/cli/session"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
 	"github.com/go-git/go-git/v6/plumbing"
 )
@@ -444,6 +446,38 @@ func TestRunSelectedImports_NonTTYProgressLines(t *testing.T) {
 
 	if want := "Imported 4 turn(s) from 2 session(s) (0 already imported).\n"; !strings.Contains(out, want) {
 		t.Errorf("final summary line missing or changed; want %q in:\n%s", want, out)
+	}
+
+	// Import success must mean both metadata representations carry a real
+	// anchor, while local imported state remains deliberately commit-less.
+	wantAnchor := testutil.GetHeadHash(t, dir)
+	stateStore, err := session.NewStateStore(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, sessionID := range []string{"sess1", "sess2"} {
+		for _, turnID := range []string{"u1", "u2"} {
+			cid := agentimport.DeriveCheckpointID(sessionID, turnID)
+			for _, suffix := range []string{"/metadata.json", "/0/metadata.json"} {
+				raw := testutil.RunGit(t, dir, "show", "entire/checkpoints/v1:"+cid.Path()+suffix)
+				var metadata struct {
+					CommitSHA string `json:"commit_sha"`
+				}
+				if err := json.Unmarshal([]byte(raw), &metadata); err != nil {
+					t.Fatal(err)
+				}
+				if metadata.CommitSHA != wantAnchor {
+					t.Errorf("%s%s anchor = %q, want %s", cid, suffix, metadata.CommitSHA, wantAnchor)
+				}
+			}
+		}
+		state, err := stateStore.Load(ctx, sessionID)
+		if err != nil || state == nil {
+			t.Fatalf("load imported session %s: %v", sessionID, err)
+		}
+		if state.BaseCommit != "" {
+			t.Errorf("imported local session %s acquired BaseCommit %q", sessionID, state.BaseCommit)
+		}
 	}
 }
 
