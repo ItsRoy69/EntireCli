@@ -96,6 +96,17 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 
+	// Warm the binary before any test deadline is running. First exec of a
+	// freshly built 65MB binary costs 2.1-2.5s on macOS (page-in plus codesign
+	// validation) against 0.03s once warm, and the build is immediately above —
+	// so otherwise the first test to spawn it pays that inside its own timeout,
+	// which is how a handshake budget in an unrelated test starts failing when
+	// this package grows. A failed warm-up only restores that, so it warns.
+	warmCmd := exec.CommandContext(context.Background(), testBinaryPath, "--version")
+	if warmOutput, warmErr := warmCmd.CombinedOutput(); warmErr != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not warm CLI binary: %v\nOutput: %s\n", warmErr, warmOutput)
+	}
+
 	// Run tests
 	code := m.Run()
 
