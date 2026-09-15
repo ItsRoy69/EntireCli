@@ -21,10 +21,10 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/strategy"
 	"github.com/entireio/cli/cmd/entire/cli/validation"
+	"github.com/entireio/cli/cmd/entire/cli/worktreedir"
 
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
-	"github.com/go-git/go-git/v6/plumbing/filemode"
 	"github.com/go-git/go-git/v6/plumbing/object"
 )
 
@@ -396,12 +396,13 @@ func filterToUncommittedFiles(ctx context.Context, files []string, repoRoot stri
 	}
 
 	// Hash the regular files through native Git so the comparison sees the
-	// same clean-filtered bytes Git would have committed. Symlinks are left
-	// out: hash-object follows the link and hashes the target's content, while
-	// a Git symlink blob stores the target path, so the two never agree.
+	// same clean-filtered bytes Git would have committed. HashableWorktreeEntry
+	// withholds the paths hash-object would answer wrongly or block on — a
+	// symlink on either side, a FIFO, a tracked file replaced by another type —
+	// and those take the raw fallback below instead.
 	hashPaths := make([]string, 0, len(candidates))
 	for _, c := range candidates {
-		if c.headFile.Mode == filemode.Symlink {
+		if !worktreedir.HashableEntry(repoRoot, c.path, c.headFile.Mode) {
 			continue
 		}
 		hashPaths = append(hashPaths, c.path)
@@ -430,10 +431,10 @@ func filterToUncommittedFiles(ctx context.Context, files []string, repoRoot stri
 			continue
 		}
 
-		// Fallback for symlinks and for anything native Git could not hash:
-		// compare the raw working-tree bytes. Filter-unaware, so it can report
-		// a clean file as modified, which keeps a file rather than dropping
-		// one — the same direction this function already fails.
+		// Fallback for every path withheld above and for anything native Git
+		// could not hash: compare the raw working-tree bytes. Filter-unaware,
+		// so it can report a clean file as modified, which keeps a file rather
+		// than dropping one — the same direction this function already fails.
 		workingContent, ok := readWorktreeFileSafely(repoRoot, c.path)
 		if !ok {
 			// Can't read working tree file (deleted?) — keep it
