@@ -23,8 +23,8 @@ const (
 // runBootstrapWith runs the full bootstrap (init + finalize) in one
 // call, used by tests that don't need to assert phasing. The real caller
 // runs the two phases around agent setup.
-func runBootstrapWith(ctx context.Context, w, errW io.Writer, opts BootstrapOptions, runner bootstrapRunner) error {
-	state, err := runBootstrapInitWith(ctx, w, errW, opts, runner)
+func runBootstrapWith(ctx context.Context, w io.Writer, opts BootstrapOptions, runner bootstrapRunner) error {
+	state, err := runBootstrapInitWith(ctx, w, opts, runner)
 	if err != nil {
 		return err
 	}
@@ -187,7 +187,7 @@ func TestRunBootstrap_DeclinedInNonInteractive(t *testing.T) {
 	dir := t.TempDir()
 	restoreCwd(t, dir)
 
-	err := runBootstrapWith(context.Background(), io.Discard, io.Discard, BootstrapOptions{}, newFakeRunner())
+	err := runBootstrapWith(context.Background(), io.Discard, BootstrapOptions{}, newFakeRunner())
 	if !errors.Is(err, errBootstrapDeclined) {
 		t.Fatalf("expected errBootstrapDeclined, got %v", err)
 	}
@@ -208,7 +208,7 @@ func TestRunBootstrap_LocalFlow(t *testing.T) {
 		InitRepo:             true,
 		InitialCommitMessage: "First!",
 	}
-	err := runBootstrapWith(context.Background(), io.Discard, io.Discard, opts, r)
+	err := runBootstrapWith(context.Background(), io.Discard, opts, r)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -272,30 +272,42 @@ func TestResolveCommitMessage_NonInteractiveDefault(t *testing.T) {
 // with their own tooling, so bootstrap must never reach the network: no gh
 // invocation, and no `git remote`/`git push`. Any future flag that adds one
 // back has to break this test first.
+//
+// It sweeps every input shape rather than just --yes, because a remote would
+// most plausibly return attached to one option rather than to all of them.
 func TestRunBootstrap_CreatesNoRemote(t *testing.T) {
-	dir := t.TempDir()
-	restoreCwd(t, dir)
-
-	r := newFakeRunner()
-	r.setIdentityConfigured()
-	r.set("git", []string{"init"}, "", nil)
-	r.set("git", []string{"add", "-A"}, "", nil)
-	r.set("git", []string{"--no-optional-locks", "status", "--porcelain"}, " M f\n", nil)
-	r.set("git", []string{"-c", "commit.gpgsign=false", "commit", "-m", defaultInitialCommitMessage}, "", nil)
-
-	// --yes is the most permissive input there is; if any path still creates
-	// a remote, this is the one that would.
-	if err := runBootstrapWith(context.Background(), io.Discard, io.Discard, BootstrapOptions{Yes: true}, r); err != nil {
-		t.Fatalf("bootstrap failed: %v", err)
+	cases := map[string]BootstrapOptions{
+		"yes":            {Yes: true},
+		"init-repo":      {InitRepo: true},
+		"custom message": {InitRepo: true, InitialCommitMessage: "custom"},
+		"skipped commit": {InitRepo: true, SkipInitialCommit: true},
 	}
+	for name, opts := range cases {
+		t.Run(name, func(t *testing.T) {
+			// No t.Parallel: restoreCwd chdirs, which is process-global.
+			restoreCwd(t, t.TempDir())
 
-	if r.hasCall(func(c fakeCall) bool { return c.name == "gh" }) {
-		t.Error("bootstrap must not invoke gh")
-	}
-	for _, sub := range []string{"remote", "push"} {
-		if r.hasCall(gitArgsMatch([]string{sub})) {
-			t.Errorf("bootstrap must not run git %s", sub)
-		}
+			r := newFakeRunner()
+			r.setIdentityConfigured()
+			r.set("git", []string{"init"}, "", nil)
+			r.set("git", []string{"add", "-A"}, "", nil)
+			r.set("git", []string{"--no-optional-locks", "status", "--porcelain"}, " M f\n", nil)
+			r.set("git", []string{"-c", "commit.gpgsign=false", "commit", "-m", defaultInitialCommitMessage}, "", nil)
+			r.set("git", []string{"-c", "commit.gpgsign=false", "commit", "-m", "custom"}, "", nil)
+
+			if err := runBootstrapWith(context.Background(), io.Discard, opts, r); err != nil {
+				t.Fatalf("bootstrap failed: %v", err)
+			}
+
+			if r.hasCall(func(c fakeCall) bool { return c.name == "gh" }) {
+				t.Error("bootstrap must not invoke gh")
+			}
+			for _, sub := range []string{"remote", "push"} {
+				if r.hasCall(gitArgsMatch([]string{sub})) {
+					t.Errorf("bootstrap must not run git %s", sub)
+				}
+			}
+		})
 	}
 }
 
@@ -320,7 +332,7 @@ func TestRunBootstrap_InitBeforeFinalize(t *testing.T) {
 	}
 
 	// Phase 1: init. This must NOT stage or commit.
-	state, err := runBootstrapInitWith(context.Background(), io.Discard, io.Discard, opts, r)
+	state, err := runBootstrapInitWith(context.Background(), io.Discard, opts, r)
 	if err != nil {
 		t.Fatalf("init failed: %v", err)
 	}
@@ -372,7 +384,7 @@ func TestEnsureGitIdentity_AlreadyConfigured(t *testing.T) {
 	r := newFakeRunner()
 	r.setIdentityConfigured()
 
-	err := ensureGitIdentity(context.Background(), io.Discard, io.Discard, r, t.TempDir())
+	err := ensureGitIdentity(context.Background(), io.Discard, r, t.TempDir())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -398,7 +410,7 @@ func TestEnsureGitIdentity_SourcedFromGh(t *testing.T) {
 	r.set("git", []string{"config", "user.name", "Octo Cat"}, "", nil)
 	r.set("git", []string{"config", "user.email", "octo@example.com"}, "", nil)
 
-	err := ensureGitIdentity(context.Background(), io.Discard, io.Discard, r, t.TempDir())
+	err := ensureGitIdentity(context.Background(), io.Discard, r, t.TempDir())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -416,7 +428,7 @@ func TestEnsureGitIdentity_GhNoreplyFallback(t *testing.T) {
 	r.set("git", []string{"config", "user.name", "octo"}, "", nil)
 	r.set("git", []string{"config", "user.email", "42+octo@users.noreply.github.com"}, "", nil)
 
-	err := ensureGitIdentity(context.Background(), io.Discard, io.Discard, r, t.TempDir())
+	err := ensureGitIdentity(context.Background(), io.Discard, r, t.TempDir())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -441,7 +453,7 @@ func TestEnsureGitIdentity_PreservesExistingName(t *testing.T) {
 	// at the user's global value.
 	r.set("git", []string{"config", "user.email", "john@example.com"}, "", nil)
 
-	err := ensureGitIdentity(context.Background(), io.Discard, io.Discard, r, t.TempDir())
+	err := ensureGitIdentity(context.Background(), io.Discard, r, t.TempDir())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -465,7 +477,7 @@ func TestEnsureGitIdentity_PreservesExistingEmail(t *testing.T) {
 	r.set("gh", []string{"api", "user"}, `{"id":42,"login":"johndoe","name":"Johnny","email":"other@example.com"}`, nil)
 	r.set("git", []string{"config", "user.name", "Johnny"}, "", nil)
 
-	err := ensureGitIdentity(context.Background(), io.Discard, io.Discard, r, t.TempDir())
+	err := ensureGitIdentity(context.Background(), io.Discard, r, t.TempDir())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -482,7 +494,7 @@ func TestEnsureGitIdentity_NonInteractiveNoGh_Errors(t *testing.T) {
 	r.set("git", []string{"config", "--get", "user.email"}, "", errors.New("not set"))
 	r.set("gh", []string{"--version"}, "", errors.New("not found"))
 
-	err := ensureGitIdentity(context.Background(), io.Discard, io.Discard, r, t.TempDir())
+	err := ensureGitIdentity(context.Background(), io.Discard, r, t.TempDir())
 	if err == nil {
 		t.Fatal("expected error when identity missing and gh unavailable")
 	}
@@ -541,7 +553,7 @@ func TestBootstrap_FreshMachine_RealGit(t *testing.T) {
 		InitRepo:             true,
 		InitialCommitMessage: "Initial",
 	}
-	err := runBootstrapWith(context.Background(), io.Discard, io.Discard, opts, execRunner{})
+	err := runBootstrapWith(context.Background(), io.Discard, opts, execRunner{})
 	if err != nil {
 		t.Fatalf("bootstrap failed: %v", err)
 	}
@@ -617,7 +629,7 @@ func TestBootstrap_FreshMachine_NoIdentity_RealGit(t *testing.T) {
 		InitialCommitMessage: "x",
 	}
 	runner := ghFailingRunner{inner: execRunner{}}
-	err := runBootstrapWith(context.Background(), io.Discard, io.Discard, opts, runner)
+	err := runBootstrapWith(context.Background(), io.Discard, opts, runner)
 	if err == nil {
 		t.Fatal("expected error when identity missing and gh unavailable")
 	}
@@ -701,7 +713,7 @@ func withInteractivePromptStdin(t *testing.T, input string) {
 func TestConfirmInitRepo_DefaultsToNo(t *testing.T) {
 	withInteractivePromptStdin(t, "\n")
 
-	proceed, err := confirmInitRepo(io.Discard, t.TempDir(), BootstrapOptions{})
+	proceed, err := confirmInitRepo(t.TempDir(), BootstrapOptions{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -715,7 +727,7 @@ func TestConfirmInitRepo_DefaultsToNo(t *testing.T) {
 func TestConfirmInitRepo_ExplicitYesProceeds(t *testing.T) {
 	withInteractivePromptStdin(t, "y\n")
 
-	proceed, err := confirmInitRepo(io.Discard, t.TempDir(), BootstrapOptions{})
+	proceed, err := confirmInitRepo(t.TempDir(), BootstrapOptions{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -780,10 +792,7 @@ func TestRunBootstrapInit_InteractiveLocalPresetUsesOneSetupAnswer(t *testing.T)
 	r.set("git", []string{"init"}, "", nil)
 
 	var out bytes.Buffer
-	state, err := runBootstrapInitWith(
-		context.Background(), &out, io.Discard,
-		BootstrapOptions{}, r,
-	)
+	state, err := runBootstrapInitWith(context.Background(), &out, BootstrapOptions{}, r)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -805,10 +814,7 @@ func TestRunBootstrapInit_InteractiveDeclineRunsNoGit(t *testing.T) {
 	withInteractivePromptStdin(t, "3\n")
 
 	r := newFakeRunner()
-	_, err := runBootstrapInitWith(
-		context.Background(), io.Discard, io.Discard,
-		BootstrapOptions{}, r,
-	)
+	_, err := runBootstrapInitWith(context.Background(), io.Discard, BootstrapOptions{}, r)
 	if !errors.Is(err, errBootstrapDeclined) {
 		t.Fatalf("err = %v, want errBootstrapDeclined", err)
 	}
@@ -830,8 +836,8 @@ func restoreCwd(t *testing.T, dir string) {
 
 func TestRunBootstrap_YesAcceptsAllDefaults(t *testing.T) {
 	// --yes should init the repo and commit with the default message,
-	// without any interactive prompts. It creates no remote: see
-	// TestRunBootstrap_CreatesNoRemote.
+	// without any interactive prompts. That it creates no remote is
+	// TestRunBootstrap_CreatesNoRemote's job, along with every other input.
 	dir := t.TempDir()
 	restoreCwd(t, dir)
 
@@ -843,7 +849,7 @@ func TestRunBootstrap_YesAcceptsAllDefaults(t *testing.T) {
 	r.set("git", []string{"-c", "commit.gpgsign=false", "commit", "-m", defaultInitialCommitMessage}, "", nil)
 
 	var stdout bytes.Buffer
-	err := runBootstrapWith(context.Background(), &stdout, io.Discard, BootstrapOptions{Yes: true}, r)
+	err := runBootstrapWith(context.Background(), &stdout, BootstrapOptions{Yes: true}, r)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

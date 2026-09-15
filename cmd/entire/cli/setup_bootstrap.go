@@ -66,7 +66,7 @@ func (execRunner) RunInDir(ctx context.Context, dir, name string, args ...string
 
 // printBootstrapSection writes a small section header so the bootstrap
 // output has visual grouping between phases (git init → agent setup →
-// commit & push). Kept simple text so it renders correctly in accessible
+// initial commit). Kept simple text so it renders correctly in accessible
 // mode and non-TTY captures.
 func printBootstrapSection(w io.Writer, title string) {
 	fmt.Fprintf(w, "\n%s\n", title)
@@ -111,12 +111,12 @@ type bootstrapState struct {
 // runs. No remote is created or contacted.
 //
 // Returns errBootstrapDeclined if the user declined the init prompt.
-func runBootstrapInit(ctx context.Context, w, errW io.Writer, opts BootstrapOptions) (*bootstrapState, error) {
-	return runBootstrapInitWith(ctx, w, errW, opts, execRunner{})
+func runBootstrapInit(ctx context.Context, w io.Writer, opts BootstrapOptions) (*bootstrapState, error) {
+	return runBootstrapInitWith(ctx, w, opts, execRunner{})
 }
 
 // runBootstrapInitWith is the testable variant that accepts a runner.
-func runBootstrapInitWith(ctx context.Context, w, errW io.Writer, opts BootstrapOptions, runner bootstrapRunner) (*bootstrapState, error) {
+func runBootstrapInitWith(ctx context.Context, w io.Writer, opts BootstrapOptions, runner bootstrapRunner) (*bootstrapState, error) {
 	// paths.RepoRoot is unavailable here — we're bootstrapping _before_ a
 	// repo exists. Plain cwd is the correct target for `git init`.
 	cwd, err := os.Getwd() //nolint:forbidigo // no repo yet; git init runs in cwd
@@ -139,7 +139,7 @@ func runBootstrapInitWith(ctx context.Context, w, errW io.Writer, opts Bootstrap
 			return nil, errBootstrapDeclined
 		}
 	} else {
-		proceed, confirmErr := confirmInitRepo(w, cwd, opts)
+		proceed, confirmErr := confirmInitRepo(cwd, opts)
 		if confirmErr != nil {
 			return nil, confirmErr
 		}
@@ -170,7 +170,7 @@ func runBootstrapInitWith(ctx context.Context, w, errW io.Writer, opts Bootstrap
 		}
 	}
 	if commit {
-		if err := ensureGitIdentity(ctx, w, errW, runner, cwd); err != nil {
+		if err := ensureGitIdentity(ctx, w, runner, cwd); err != nil {
 			return nil, err
 		}
 	}
@@ -218,7 +218,7 @@ func runBootstrapFinalize(ctx context.Context, w io.Writer, s *bootstrapState) e
 // non-interactive mode we return false without printing anything so
 // the caller (setup.go) owns the "Not a git repository" message and
 // doesn't end up with duplicate output on stdout + stderr.
-func confirmInitRepo(_ io.Writer, cwd string, opts BootstrapOptions) (bool, error) {
+func confirmInitRepo(cwd string, opts BootstrapOptions) (bool, error) {
 	if opts.NoInitRepo {
 		return false, nil
 	}
@@ -300,8 +300,7 @@ func promptBootstrapSetupChoice(w io.Writer, cwd string) (bootstrapSetupChoice, 
 
 // resolveCommitMessage returns the message to use for the initial
 // commit. The second return value is false when the user chose to skip
-// the initial commit entirely; callers must skip `doInitialCommit` and
-// any subsequent push.
+// the initial commit entirely; callers must skip `doInitialCommit`.
 func resolveCommitMessage(opts BootstrapOptions) (string, bool, error) {
 	if opts.SkipInitialCommit {
 		return "", false, nil
@@ -415,7 +414,7 @@ func wrapExecError(prefix string, err error) error {
 // when available, otherwise prompt (interactive) or fail with a helpful
 // message (non-interactive). Values are written to the local repo config
 // only, so the user's global state is never mutated.
-func ensureGitIdentity(ctx context.Context, w, _ io.Writer, runner bootstrapRunner, dir string) error {
+func ensureGitIdentity(ctx context.Context, w io.Writer, runner bootstrapRunner, dir string) error {
 	// `git config --get` exits non-zero when the key isn't set. Treat any
 	// error as "unset" rather than fatal so we can fall through to sourcing
 	// the identity from elsewhere.
