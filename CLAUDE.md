@@ -125,7 +125,10 @@ the commands are always runnable in every build.
   that takes a repo ref — `get`, `delete`, and the `visibility` and `protection`
   subtrees (COR-1632). `repo grant` takes that path and nothing else — no
   `--project`, no bare name, no ULID — through `resolveRepoPath`, which parses
-  with `parseNativeCloneRef` and resolves like `resolveNativeRepo`. The other two
+  with `parseNativeCloneRef` and resolves both segments by name only (a project
+  or repo can be *named* like a ULID, so path segments never touch the
+  `looksLikeULID` passthrough; `resolveRepoPathRef` and `resolveNativeRepo`
+  still do, pending the removal of repo-ULID addressing). The other two
   clone shapes are not: a `/gh/` mirror ref is refused there (the by-name
   lookup resolves a project and then a repo inside it, and a mirror is in no
   project — so a mirror is addressed by ULID), and an `entire://` URL is not

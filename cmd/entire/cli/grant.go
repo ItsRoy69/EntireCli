@@ -79,9 +79,10 @@ func newGrantAddCmd[Row any](t grantTarget[Row]) *cobra.Command {
 		Example: example,
 		Args:    cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// Empty only reaches here on a target with a server default;
-			// markRequired refuses it on the others.
-			if role != "" {
+			// Empty means the server default only where there is one. Where
+			// the role is required it is still checked: markRequired asks
+			// whether the flag was given, so `--role=` passes it with "".
+			if required || role != "" {
 				if err := validateRole(role, t.roles); err != nil {
 					cmd.SilenceUsage = true
 					return err

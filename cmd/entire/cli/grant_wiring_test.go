@@ -191,3 +191,30 @@ func TestRepoGrant_TakesOnlyTheNativePath(t *testing.T) {
 		require.ErrorContains(t, err, "unknown flag: --project")
 	})
 }
+
+// TestGrantAdd_EmptyRoleIsRefusedLocally pins that an explicit empty --role on
+// a target whose role is required is an invalid role, not a request: cobra's
+// required-flag check only asks whether the flag was given, so `--role=` passes
+// it with an empty value, and the empty string must then fail role validation
+// before any lookup or grant call is made.
+//
+// Not parallel: runCoreCmd swaps the package-level activeCoreClient seam.
+func TestGrantAdd_EmptyRoleIsRefusedLocally(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+	}))
+	t.Cleanup(srv.Close)
+
+	for name, tc := range map[string]struct {
+		newCmd func() *cobra.Command
+		target string
+	}{
+		"project": {newProjectGrantCmd, wiringProjULID},
+		"repo":    {newRepoGrantCmd, wiringRepoPath},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, _, err := runCoreCmd(t, tc.newCmd, srv.URL, "add", tc.target, "github:alice", "--role=")
+			require.ErrorContains(t, err, `invalid --role ""`)
+		})
+	}
+}

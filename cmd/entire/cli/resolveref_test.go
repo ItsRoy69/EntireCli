@@ -459,6 +459,25 @@ func TestResolveRepoPath(t *testing.T) {
 		}
 	})
 
+	t.Run("a ULID-shaped segment is still a name", func(t *testing.T) {
+		t.Parallel()
+		// The server's name rules admit 26 base32 characters, so a project or
+		// repo can be NAMED like a ULID. Inside a path both segments are names
+		// by construction and must go through the by-name lookups, never the
+		// ULID passthrough that a bare ref gets.
+		for _, ref := range []string{"/et/widgets/" + ulidAccount, "/et/" + ulidAccount + "/web"} {
+			t.Run(ref, func(t *testing.T) {
+				t.Parallel()
+				var gotRepoName string
+				c, calls := resolveTestClient(t, nativePathHandler(t, &gotRepoName))
+				got, err := resolveRepoPath(context.Background(), c, ref)
+				require.NoError(t, err)
+				require.Equal(t, ulidRepoWeb, got)
+				require.EqualValues(t, 2, calls.Load(), "project + repo lookup")
+			})
+		}
+	})
+
 	t.Run("anything but the native path is refused without a request", func(t *testing.T) {
 		t.Parallel()
 		for _, ref := range []string{ulidRepoWeb, "web", "widgets/web", "/gh/acme/tool"} {
