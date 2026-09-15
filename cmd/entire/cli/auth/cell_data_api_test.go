@@ -919,6 +919,54 @@ func TestCellClientFactory_EnvTokenActsLikeCore(t *testing.T) {
 	}
 }
 
+// TestCellClientFactory_EnvTokenHonoursExplicitDataHost: ENTIRE_TOKEN decides
+// the login, but an explicit ENTIRE_API_BASE_URL still decides the host, with
+// the same rules as a stored login — a direct cell or loopback dev server is
+// dialed verbatim, an apex goes to the token's core catalog. Without this a
+// pasted token plus a local data host sent the request to the token's home
+// cell in AWS (trail finding on #2414).
+func TestCellClientFactory_EnvTokenHonoursExplicitDataHost(t *testing.T) {
+	tests := []struct {
+		name         string
+		baseURL      string
+		insecure     bool
+		wantCell     string
+		wantCatalogs int
+	}{
+		{"loopback dev host", "http://127.0.0.1:8082", true, "http://127.0.0.1:8082", 0},
+		{"direct cell", "https://aws-eu-west-1.api.partial.to", false, "https://aws-eu-west-1.api.partial.to", 0},
+		{"apex resolves via the token's catalog", "https://partial.to", false, "https://aws-us-west-2.api.partial.to", 1},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			isolateCellClientEnv(t, tc.baseURL)
+			envToken := makeJWT(t, fmt.Sprintf(`{"aud":%q,"home_jurisdiction":"us","exp":%d}`, stagingCoreURL, time.Now().Add(2*time.Hour).Unix()))
+			t.Setenv(EnvTokenVar, envToken)
+			rt := &catalogTransport{coreHost: stagingFixture.coreHost(), listing: stagingFixture.catalog}
+			t.Cleanup(SetCellExchangeTransportForTest(t, rt))
+			if tc.insecure {
+				insecureHTTPOverride.Store(true)
+				t.Cleanup(func() { insecureHTTPOverride.Store(false) })
+			}
+
+			factory, err := NewEntireAPICellClientFactory(context.Background(), tc.insecure)
+			if err != nil {
+				t.Fatalf("NewEntireAPICellClientFactory: %v", err)
+			}
+			got, err := factory.cellBaseURLFor(context.Background(), nil)
+			if err != nil {
+				t.Fatalf("cellBaseURLFor: %v", err)
+			}
+			if got != tc.wantCell {
+				t.Fatalf("cell base URL = %q, want %q", got, tc.wantCell)
+			}
+			if len(rt.clusters) != tc.wantCatalogs {
+				t.Fatalf("clusters listed %d times, want %d", len(rt.clusters), tc.wantCatalogs)
+			}
+		})
+	}
+}
+
 // TestDataAPIServesSelectedLogin pins when activity/recap may fall back from
 // the cell to the data API: only while both are in the same environment.
 func TestDataAPIServesSelectedLogin(t *testing.T) {

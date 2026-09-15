@@ -287,12 +287,28 @@ func resolveActiveContextCellSubject(ctx context.Context, insecureHTTP bool) (ce
 // no credentials. An explicit override is different: the user named a host the
 // request must reach, so its trusted-issuer document decides which saved login
 // may authenticate it rather than the selected context being trusted blindly.
-// An env token is used verbatim even under an override, as coreapi.New does.
+// An env token is used verbatim even under an override, as coreapi.New does —
+// but the override still names the host to dial: a direct cell or loopback
+// dev server stays verbatim, exactly as it does for a stored login, so a
+// pasted token plus a local ENTIRE_API_BASE_URL keeps the request on the
+// machine instead of sending it to the token's home cell.
 func resolveCellClientSubject(ctx context.Context, insecureHTTP bool) (cellSubject, error) {
-	if raw, ok := os.LookupEnv(EnvTokenVar); ok {
-		return resolveEnvTokenCellSubject(raw, insecureHTTP)
-	}
 	dataURL, overridden := api.BaseURLOverride()
+	if raw, ok := os.LookupEnv(EnvTokenVar); ok {
+		subject, err := resolveEnvTokenCellSubject(raw, insecureHTTP)
+		if err != nil {
+			return cellSubject{}, err
+		}
+		if overridden {
+			if !insecureHTTP {
+				if err := api.RequireSecureURL(dataURL); err != nil {
+					return cellSubject{}, fmt.Errorf("base URL check: %w", err)
+				}
+			}
+			subject.dataHost = api.OriginOnly(dataURL)
+		}
+		return subject, nil
+	}
 	if !overridden {
 		return resolveActiveContextCellSubject(ctx, insecureHTTP)
 	}
