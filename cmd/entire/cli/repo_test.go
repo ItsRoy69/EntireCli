@@ -318,7 +318,9 @@ func serveRepoCreateWith(t *testing.T, created *coreapi.Repo) <-chan []byte {
 		bodyCh <- raw
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
-		if err := printJSON(w, created); err != nil {
+		response := *created
+		response.State = coreapi.NewOptString("active")
+		if err := printJSON(w, &response); err != nil {
 			t.Errorf("encode create response: %v", err)
 		}
 	}))
