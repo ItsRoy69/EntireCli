@@ -19,8 +19,9 @@ import (
 // the three in reverse. Not parallel: the suite shares one test account.
 func TestControlPlane_CreateCloneDelete(t *testing.T) {
 	dir := t.TempDir()
+	sweepLeaked(t, dir)
 	// Lowercase and 3–32 chars: valid as an org, project, and repo name.
-	name := fmt.Sprintf("e2e-cp-%d", time.Now().Unix())
+	name := fmt.Sprintf("%s%d", namePrefix, time.Now().Unix())
 
 	// Each cleanup is registered as soon as the create returns, by name, so a
 	// create that succeeds but prints unusable JSON still gets deleted. The ref
