@@ -22,24 +22,34 @@ func TestControlPlane_CreateCloneDelete(t *testing.T) {
 	// Lowercase and 3–32 chars: valid as an org, project, and repo name.
 	name := fmt.Sprintf("e2e-cp-%d", time.Now().Unix())
 
+	// Each cleanup is registered as soon as the create returns, by name, so a
+	// create that succeeds but prints unusable JSON still gets deleted. The ref
+	// switches to the ULID once known: a name that no longer resolves is an
+	// error, while deleting an already-deleted ULID exits 0.
 	stdout, _ := mustRunEntire(t, dir, "org", "create", name, "--json")
+	orgRef := name
+	t.Cleanup(func() { deleteResource(t, dir, "org", orgRef) })
 	org := decodeJSON[struct {
 		ID string `json:"id"`
 	}](t, stdout)
 	require.NotEmpty(t, org.ID)
-	t.Cleanup(func() { deleteResource(t, dir, "org", org.ID) })
+	orgRef = org.ID
 
 	stdout, _ = mustRunEntire(t, dir, "project", "create", name, "--owner", org.ID, "--json")
+	projectRef := name
+	t.Cleanup(func() { deleteResource(t, dir, "project", projectRef) })
 	project := decodeJSON[struct {
 		ID string `json:"id"`
 	}](t, stdout)
 	require.NotEmpty(t, project.ID)
-	t.Cleanup(func() { deleteResource(t, dir, "project", project.ID) })
+	projectRef = project.ID
 
 	stdout, _ = mustRunEntire(t, dir, "repo", "create", name, "--project", project.ID, "--json")
+	repoRef := "/et/" + name + "/" + name
+	t.Cleanup(func() { deleteResource(t, dir, "repo", repoRef) })
 	created := decodeJSON[repoJSON](t, stdout)
 	require.NotEmpty(t, created.ID)
-	t.Cleanup(func() { deleteResource(t, dir, "repo", created.ID) })
+	repoRef = created.ID
 	repo := waitForRepoClonable(t, dir, "/et/"+name+"/"+name)
 	require.Equal(t, created.ID, repo.ID)
 	require.Equal(t, "/et/"+name+"/"+name, repo.Path)
