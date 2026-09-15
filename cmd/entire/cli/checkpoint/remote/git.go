@@ -443,10 +443,53 @@ func PushWithOptions(ctx context.Context, opts PushOptions) (PushResult, error) 
 	disableTerminalPrompt(cmd)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return PushResult{Output: string(output)}, fmt.Errorf("git push: %w", err)
+		return PushResult{Output: string(output)}, fmt.Errorf("git push: %w", formatGitPushError(ctx, err, output, pushTarget))
 	}
 	return PushResult{Output: string(output)}, nil
 }
+
+// formatGitPushError enriches a failed push with git's own output, so a caller
+// that logs only the error still learns why the remote said no.
+//
+// formatGitCommandError cannot do this job: it reads exitErr.Stderr, which the
+// os/exec contract populates only for Output(), and Push uses CombinedOutput().
+// The remote's reason — "push declined due to repository rule violations" from a
+// secret-scanning or ruleset block, "non-fast-forward", "repository not found",
+// an auth failure — therefore lives in the combined output, and dropping it
+// leaves the caller with a bare "git push: exit status 1". That is not enough to
+// act on: a checkpoint ref rejected for its content retries on every push and
+// stays queued forever, and the only way to see the cause was to reproduce the
+// push by hand.
+//
+// The output is collapsed to one line and capped so it stays usable as a log
+// attribute, and a URL-shaped target is redacted first because git echoes the
+// remote back into its messages and a URL may carry credentials (same reasoning
+// as formatGitCommandError and FetchBlobs).
+func formatGitPushError(ctx context.Context, err error, output []byte, remote string) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return fmt.Errorf("deadline exceeded: %w", err)
+	}
+	detail := strings.TrimSpace(string(output))
+	if detail == "" {
+		return err
+	}
+	if remote != "" {
+		detail = strings.ReplaceAll(detail, remote, RedactURLOrPath(remote))
+	}
+	detail = strings.Join(strings.Fields(detail), " ")
+	if len(detail) > maxPushErrorDetail {
+		detail = detail[:maxPushErrorDetail] + "…"
+	}
+	return fmt.Errorf("%w (%s)", err, detail)
+}
+
+// maxPushErrorDetail bounds the git output folded into a push error. Push output
+// carries progress and per-ref status lines, and the whole of it can be large;
+// the rejection reason is what matters and sits well inside this.
+const maxPushErrorDetail = 2000
 
 // LsRemoteInDir is like LsRemote but runs in a specific directory.
 func LsRemoteInDir(ctx context.Context, dir, remote string, patterns ...string) ([]byte, error) {

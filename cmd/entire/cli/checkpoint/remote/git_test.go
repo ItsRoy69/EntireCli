@@ -1271,3 +1271,65 @@ func TestFormatGitCommandError_RedactsRemoteURL(t *testing.T) {
 	assert.NotContains(t, msg, "user:hunter2")
 	assert.Contains(t, msg, RedactURL(remote))
 }
+
+// The rejection reason lives in the combined output, not ExitError.Stderr, so a
+// bare "exit status 1" is all a caller used to get for a ref the remote refused.
+func TestFormatGitPushError_SurfacesRemoteRejection(t *testing.T) {
+	t.Parallel()
+
+	const reason = "push declined due to repository rule violations"
+	cmd := exec.CommandContext(context.Background(), "sh", "-c",
+		fmt.Sprintf(`printf '! [remote rejected] refs/entire/checkpoints/W1/X -> refs/entire/checkpoints/W1/X (%s)\n' >&2; exit 1`, reason))
+	output, err := cmd.CombinedOutput()
+	require.Error(t, err)
+	// Precondition: CombinedOutput leaves Stderr empty, which is why
+	// formatGitCommandError cannot be reused here.
+	var exitErr *exec.ExitError
+	require.ErrorAs(t, err, &exitErr)
+	require.Empty(t, exitErr.Stderr)
+
+	formatted := formatGitPushError(context.Background(), err, output, "origin")
+	require.Error(t, formatted)
+	assert.Contains(t, formatted.Error(), reason)
+	assert.ErrorIs(t, formatted, err)
+}
+
+func TestFormatGitPushError_RedactsRemoteURL(t *testing.T) {
+	t.Parallel()
+
+	remote := "https://user:hunter2@github.com/org/repo.git"
+	output := []byte(fmt.Sprintf("fatal: could not read from '%s'\n", remote))
+	err := &exec.ExitError{ProcessState: nil}
+
+	formatted := formatGitPushError(context.Background(), err, output, remote)
+	require.Error(t, formatted)
+	msg := formatted.Error()
+	assert.NotContains(t, msg, "hunter2")
+	assert.Contains(t, msg, RedactURLOrPath(remote))
+}
+
+// Multi-line git output has to stay usable as a single log attribute.
+func TestFormatGitPushError_CollapsesAndCaps(t *testing.T) {
+	t.Parallel()
+
+	err := &exec.ExitError{ProcessState: nil}
+
+	formatted := formatGitPushError(context.Background(), err, []byte("line one\n\nline  two\n"), "origin")
+	require.Error(t, formatted)
+	assert.Contains(t, formatted.Error(), "line one line two")
+	assert.NotContains(t, formatted.Error(), "\n")
+
+	long := formatGitPushError(context.Background(), err, []byte(strings.Repeat("x", maxPushErrorDetail*2)), "origin")
+	require.Error(t, long)
+	assert.Less(t, len(long.Error()), maxPushErrorDetail+100)
+	assert.Contains(t, long.Error(), "…")
+}
+
+// Empty output leaves the original error untouched rather than adding "()".
+func TestFormatGitPushError_NoOutputIsUnchanged(t *testing.T) {
+	t.Parallel()
+
+	err := &exec.ExitError{ProcessState: nil}
+	assert.Equal(t, err, formatGitPushError(context.Background(), err, []byte("  \n"), "origin"))
+	assert.NoError(t, formatGitPushError(context.Background(), nil, []byte("x"), "origin"))
+}
