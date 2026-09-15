@@ -176,10 +176,26 @@ func TestRun_ImportsAndIsIdempotent(t *testing.T) {
 
 // TestRun_StampsLinkCommitSHA proves a validated uppercase input is persisted
 // canonically in each checkpoint's root and session metadata.
+//
+// The anchor is deliberately the PARENT, not HEAD. Every fixture in this file
+// anchors to the repo's only commit, which makes "persisted what the caller
+// gave us" and "read HEAD itself" indistinguishable — an implementation that
+// ignored opts.LinkCommitSHA entirely would satisfy all of them. A second
+// commit is what separates the two, so this test fails if Run ever starts
+// resolving the anchor on its own. Uppercase input covers canonicalization,
+// which is a different property and does not imply this one.
 func TestRun_StampsLinkCommitSHA(t *testing.T) {
 	t.Parallel()
 	repo, repoDir := initRepoWithCommit(t)
 	commitSHA := repoHeadSHA(t, repo)
+	wt, err := repo.Worktree()
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeAndCommit(t, wt, repoDir, "y", "second")
+	if tip := repoHeadSHA(t, repo); tip == commitSHA {
+		t.Fatal("fixture needs HEAD to differ from the anchor")
+	}
 
 	claudeDirWithSHA := t.TempDir()
 	writeFixtureSession(t, claudeDirWithSHA, "sess-with-sha.jsonl")

@@ -9,19 +9,28 @@ import (
 	"github.com/go-git/go-git/v6/plumbing"
 )
 
-// ValidateAnchorCommit requires a full hexadecimal object ID naming a commit
-// in repo and returns its canonical lowercase ID. It never interprets the input
-// as a ref or revision expression, or peels a tag into a commit.
+// ErrAnchorRepoConfig reports that the repository's object format could not be
+// read, so no anchor could be checked. It is separated from the rejections
+// below because it says nothing about the candidate: it fails identically for
+// every one, and a caller looping over candidates must stop rather than
+// mistake it for "this ref's object is missing" and end up blaming the refs.
+var ErrAnchorRepoConfig = errors.New("read anchor repository config")
+
+// ValidateAnchorCommit requires a full hexadecimal object ID in the
+// repository's object format (40 hex characters under SHA-1, 64 under
+// SHA-256) naming a commit in repo, and returns its canonical lowercase ID. It
+// never interprets the input as a ref or revision expression, or peels a tag
+// into a commit.
 func ValidateAnchorCommit(repo *git.Repository, sha string) (string, error) {
-	// Named separately from the length check below: Run is exported, so an
-	// unset field is a caller that forgot one, and "must be a full
-	// 40-character hexadecimal commit ID" describes a typo instead.
+	// Named separately from the length complaint below: Run is exported, so an
+	// unset field is a caller that forgot one, and telling them about
+	// hexadecimal width describes a typo they did not make.
 	if sha == "" {
 		return "", errors.New("import anchor is required: no commit ID was resolved for this import")
 	}
 	cfg, err := repo.Config()
 	if err != nil {
-		return "", fmt.Errorf("read anchor repository config: %w", err)
+		return "", fmt.Errorf("%w: %w", ErrAnchorRepoConfig, err)
 	}
 	if len(sha) != cfg.Extensions.ObjectFormat.HexSize() {
 		return "", fmt.Errorf("import anchor must be a full %d-character hexadecimal commit ID", cfg.Extensions.ObjectFormat.HexSize())

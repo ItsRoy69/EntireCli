@@ -4,54 +4,94 @@ import (
 	"context"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/go-git/go-billy/v6/memfs"
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
 	formatcfg "github.com/go-git/go-git/v6/plumbing/format/config"
 	"github.com/go-git/go-git/v6/plumbing/object"
-	"github.com/go-git/go-git/v6/storage/memory"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
+	"github.com/entireio/cli/cmd/entire/cli/gitrepo"
+	"github.com/entireio/cli/cmd/entire/cli/testutil"
 )
+
+// initRepoWithFormat creates an on-disk repo in the given object format and
+// returns it with its single commit's ID.
+//
+// On disk deliberately, not in memory: git.WithObjectFormat has no effect on a
+// pre-made memory.NewStorage, so an in-memory "sha256" repo silently stays
+// SHA-1 — both formats produce the same 40-char hash and the same empty
+// extensions.objectformat. The earlier version of this test did exactly that
+// and so ran SHA-1 twice, leaving the HexSize() branch (the only reason
+// ValidateAnchorCommit does not hard-code 40) with no coverage at all.
+// extensions.objectformat is what carries the format, and only a real
+// repository has one.
+func initRepoWithFormat(t *testing.T, format formatcfg.ObjectFormat) (*git.Repository, string) {
+	t.Helper()
+	dir := t.TempDir()
+	runGit := func(args ...string) string {
+		t.Helper()
+		cmd := exec.CommandContext(t.Context(), "git", args...)
+		cmd.Dir = dir
+		cmd.Env = testutil.GitIsolatedEnv()
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Skipf("git %v failed (no support for %s?): %v\n%s", args, format, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	runGit("init", "--object-format="+string(format), ".")
+	if got := runGit("rev-parse", "--show-object-format=storage"); got != string(format) {
+		t.Skipf("git initialized object format %q, not %s", got, format)
+	}
+	runGit("config", "user.name", "Test")
+	runGit("config", "user.email", "test@test.com")
+	runGit("config", "commit.gpgsign", "false")
+	runGit("commit", "--allow-empty", "-m", "anchor")
+	repo, err := gitrepo.OpenPath(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = repo.Close() })
+	return repo, runGit("rev-parse", "HEAD")
+}
 
 func TestValidateAnchorCommit_ObjectFormats(t *testing.T) {
 	t.Parallel()
 	for _, format := range []formatcfg.ObjectFormat{formatcfg.SHA1, formatcfg.SHA256} {
 		t.Run(string(format), func(t *testing.T) {
 			t.Parallel()
-			// The filesystem test helper initializes only the default format.
-			// An in-memory repo permits both formats without touching user config.
-			repo, err := git.Init(memory.NewStorage(), git.WithWorkTree(memfs.New()), git.WithObjectFormat(format))
-			if err != nil {
-				t.Fatal(err)
+			repo, commit := initRepoWithFormat(t, format)
+			// Pin that the fixture is the format it claims, so a future
+			// regression degrades to a skip rather than to a silent duplicate
+			// of the SHA-1 case.
+			if want := format.HexSize(); len(commit) != want {
+				t.Fatalf("fixture commit %q is %d chars, want %d for %s", commit, len(commit), want, format)
 			}
-			wt, err := repo.Worktree()
-			if err != nil {
-				t.Fatal(err)
-			}
-			signature := &object.Signature{Name: "Test", Email: "test@test.com", When: time.Now()}
-			commit, err := wt.Commit("anchor", &git.CommitOptions{Author: signature, Committer: signature, AllowEmptyCommits: true})
-			if err != nil {
-				t.Fatal(err)
-			}
-			got, err := ValidateAnchorCommit(repo, strings.ToUpper(commit.String()))
-			if err != nil || got != commit.String() {
+			got, err := ValidateAnchorCommit(repo, strings.ToUpper(commit))
+			if err != nil || got != commit {
 				t.Fatalf("ValidateAnchorCommit = %q, %v; want %q", got, err, commit)
 			}
-			// A length accepted by another object format is not a full ID here.
+			// A length valid under the OTHER object format is not a full ID
+			// here. All-'a' is hex, so this reaches the length check and only
+			// the length check.
 			wrongSize := formatcfg.SHA256.HexSize()
 			if format == formatcfg.SHA256 {
 				wrongSize = formatcfg.SHA1.HexSize()
 			}
-			if _, err := ValidateAnchorCommit(repo, strings.Repeat("a", wrongSize)); err == nil {
+			_, err = ValidateAnchorCommit(repo, strings.Repeat("a", wrongSize))
+			if err == nil {
 				t.Fatal("accepted another object format's length")
+			}
+			if !strings.Contains(err.Error(), "hexadecimal commit ID") {
+				t.Errorf("wrong-length error = %q, want the length complaint", err)
 			}
 		})
 	}
@@ -124,19 +164,44 @@ func TestRun_RejectsInvalidAnchorBeforeWrites(t *testing.T) {
 						"revision": "HEAD", "expression": "HEAD~1", "missing": strings.Repeat("0", len(sha)),
 						"tree": commit.TreeHash.String(), "blob": file.Hash.String(), "tag": tag.Hash().String(), "hex-ref": missing,
 					}
+					// Assert WHICH complaint each input draws, not merely that
+					// it failed. Rejection alone is nearly free: an input of the
+					// wrong length or the wrong alphabet becomes the zero hash
+					// and fails the object lookup anyway, so "short" and
+					// "nonhex" pass with the length and hex checks deleted
+					// outright. Pinning the message is what keeps those two
+					// checks — and the diagnostics they exist to produce — alive.
+					wantErr := map[string]string{
+						"empty": "import anchor is required", "short": "must be a full", "overlong": "must be a full",
+						"nonhex": "must be hexadecimal", "revision": "must be a full", "expression": "must be a full",
+						"missing": "does not resolve to a commit object", "tree": "does not resolve to a commit object",
+						"blob": "does not resolve to a commit object", "tag": "does not resolve to a commit object",
+						"hex-ref": "does not resolve to a commit object",
+					}
 					transcripts := t.TempDir()
 					writeFixtureSession(t, transcripts, "anchor.jsonl")
 					opts := Options{RepoRoot: dir, OverridePath: transcripts, Now: time.Date(2026, 6, 25, 0, 0, 0, 0, time.UTC), LinkCommitSHA: sha}
 					if mode == "already-imported" {
-						if _, err := Run(t.Context(), repo, claudeImporter{}, opts); err != nil {
+						// Assert the seeding run actually imported: without
+						// this, a fixture that stopped yielding turns would
+						// silently turn this mode into a duplicate of "import"
+						// while the test stayed green.
+						seeded, err := Run(t.Context(), repo, claudeImporter{}, opts)
+						if err != nil {
 							t.Fatal(err)
+						}
+						if seeded.TurnsImported == 0 {
+							t.Fatal("seeding run imported nothing; this mode would not test already-imported turns")
 						}
 					}
 					before := importGitFiles(t, dir)
 					opts.LinkCommitSHA = inputs[name]
 					opts.DryRun = mode == "dry-run"
-					if _, err := Run(context.Background(), repo, claudeImporter{}, opts); err == nil {
+					_, runErr := Run(context.Background(), repo, claudeImporter{}, opts)
+					if runErr == nil {
 						t.Errorf("expected invalid anchor %q to fail", opts.LinkCommitSHA)
+					} else if !strings.Contains(runErr.Error(), wantErr[name]) {
+						t.Errorf("anchor %q error = %q, want it to contain %q", opts.LinkCommitSHA, runErr, wantErr[name])
 					}
 					if after := importGitFiles(t, dir); !reflect.DeepEqual(before, after) {
 						t.Error("invalid anchor changed git/checkpoint/session files")

@@ -638,7 +638,8 @@ When condensing multiple concurrent sessions:
 - `sessions` array in `CheckpointSummary` maps each session to its file paths
 - `files_touched` is merged from all sessions
 
-Checkpoints written by `entire import <agent>` additionally carry a `commit_sha`
+Checkpoints written by the import path — `entire import <agent>` and `entire
+enable`'s optional history import — additionally carry a `commit_sha`
 (omitempty) on both the session `Metadata` and the root `CheckpointSummary`,
 set to the default branch's head at import time — origin's tip is preferred
 (the commit the server already knows about), falling back to the local branch

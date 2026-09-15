@@ -142,16 +142,22 @@ func TestImportClaudeCode_CheckpointDeliveryDoesNotDeliverCodeAnchor(t *testing.
 // writing anchorless checkpoints.
 func TestImportClaudeCode_AnchorlessRepoRefusesImport(t *testing.T) {
 	t.Parallel()
-	env := NewTestEnv(t)
-	env.InitRepo()
-	testutil.WriteFile(t, env.ClaudeProjectDir, "anchorless.jsonl",
-		`{"type":"user","uuid":"u1","timestamp":"2026-06-20T00:00:00Z","message":{"role":"user","content":"first"}}`+"\n")
-	for _, extra := range [][]string{nil, {"--dry-run"}} {
-		out, err := env.RunCLIWithError(append([]string{"import", agentClaudeCode}, extra...)...)
-		require.Error(t, err, "output: %s", out)
-		require.Contains(t, out, "without a valid anchor commit")
-	}
-	require.False(t, env.CheckpointsPresentLocally())
+	// Both backends: CheckpointsPresentLocally reads a different namespace for
+	// each (the v1 branch vs refs/entire/checkpoints/), so a single-backend run
+	// leaves the other one's "nothing was written" unasserted.
+	ForEachBackend(t, func(t *testing.T, backend string) {
+		env := NewTestEnv(t)
+		env.CheckpointStore = backend
+		env.InitRepo()
+		testutil.WriteFile(t, env.ClaudeProjectDir, "anchorless.jsonl",
+			`{"type":"user","uuid":"u1","timestamp":"2026-06-20T00:00:00Z","message":{"role":"user","content":"first"}}`+"\n")
+		for _, extra := range [][]string{nil, {"--dry-run"}} {
+			out, err := env.RunCLIWithError(append([]string{"import", agentClaudeCode}, extra...)...)
+			require.Error(t, err, "output: %s", out)
+			require.Contains(t, out, "without a valid anchor commit")
+		}
+		require.False(t, env.CheckpointsPresentLocally())
+	})
 }
 
 func importAnchorFixture(t *testing.T, env *TestEnv, recorded, fallback string) string {

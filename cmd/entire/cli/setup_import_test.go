@@ -67,7 +67,7 @@ func TestImporterForAgent_UnknownTypeReturnsNil(t *testing.T) {
 
 // withImportSeams overrides the package seams and restores them after the test.
 // Tests using it must not call t.Parallel (shared package state).
-func withImportSeams(t *testing.T, discover func(context.Context, []agent.Agent, string) []eligibleImport, prompt func(context.Context, io.Writer, []eligibleImport) ([]eligibleImport, error), run func(context.Context, io.Writer, string, []eligibleImport)) {
+func withImportSeams(t *testing.T, discover func(context.Context, []agent.Agent, string) []eligibleImport, prompt func(context.Context, io.Writer, []eligibleImport) ([]eligibleImport, error), run func(context.Context, io.Writer, string, string, []eligibleImport)) {
 	t.Helper()
 	oldDiscover, oldPrompt, oldRun := sessionImportDiscover, sessionImportPrompt, sessionImportRun
 	t.Cleanup(func() {
@@ -100,11 +100,25 @@ func TestMaybeOfferSessionImport_FirstRunGate(t *testing.T) {
 	}
 }
 
-func TestMaybeOfferSessionImport_ImportHistoryImportsAllWithoutPrompting(t *testing.T) {
-	// Not parallel: overrides seams and chdirs into a temp repo.
+// importTestRepo creates an isolated repo with one commit and chdirs into it.
+// The commit is load-bearing, not incidental: maybeOfferSessionImport resolves
+// the import anchor before it prompts, so a commitless fixture short-circuits
+// with a skip notice before reaching the seams under test.
+func importTestRepo(t *testing.T) string {
+	t.Helper()
 	dir := t.TempDir()
 	testutil.InitRepo(t, dir)
+	testutil.WriteFile(t, dir, "f.txt", "x")
+	testutil.GitAdd(t, dir, "f.txt")
+	testutil.GitCommit(t, dir, "init")
 	t.Chdir(dir)
+	return dir
+}
+
+func TestMaybeOfferSessionImport_ImportHistoryImportsAllWithoutPrompting(t *testing.T) {
+	// Not parallel: overrides seams and chdirs into a temp repo.
+	dir := importTestRepo(t)
+	_ = dir
 
 	eligible := []eligibleImport{
 		{displayName: testAgentClaude, sessionCount: 3},
@@ -118,7 +132,7 @@ func TestMaybeOfferSessionImport_ImportHistoryImportsAllWithoutPrompting(t *test
 			promptCalled = true
 			return nil, nil
 		},
-		func(_ context.Context, _ io.Writer, _ string, sel []eligibleImport) { ran = sel },
+		func(_ context.Context, _ io.Writer, _, _ string, sel []eligibleImport) { ran = sel },
 	)
 
 	// --import-history is the explicit, non-interactive opt-in: it imports
@@ -157,7 +171,7 @@ func TestMaybeOfferSessionImport_YesDoesNotImport(t *testing.T) {
 			promptCalled = true
 			return nil, nil
 		},
-		func(_ context.Context, _ io.Writer, _ string, sel []eligibleImport) { ran = sel },
+		func(_ context.Context, _ io.Writer, _, _ string, sel []eligibleImport) { ran = sel },
 	)
 
 	var buf bytes.Buffer
@@ -213,7 +227,7 @@ func TestMaybeOfferSessionImport_NonInteractiveWithoutOptInSkips(t *testing.T) {
 			promptCalled = true
 			return nil, nil
 		},
-		func(_ context.Context, _ io.Writer, _ string, sel []eligibleImport) { ran = sel },
+		func(_ context.Context, _ io.Writer, _, _ string, sel []eligibleImport) { ran = sel },
 	)
 
 	// No opt-in flag and no TTY: neither prompt nor auto-import; just hint at
@@ -240,7 +254,7 @@ func TestMaybeOfferSessionImport_NoEligibleIsNoOp(t *testing.T) {
 	withImportSeams(t,
 		func(context.Context, []agent.Agent, string) []eligibleImport { return nil },
 		nil,
-		func(context.Context, io.Writer, string, []eligibleImport) { runCalled = true },
+		func(context.Context, io.Writer, string, string, []eligibleImport) { runCalled = true },
 	)
 
 	maybeOfferSessionImport(context.Background(), io.Discard, nil, EnableOptions{Yes: true}, true)
@@ -250,9 +264,7 @@ func TestMaybeOfferSessionImport_NoEligibleIsNoOp(t *testing.T) {
 }
 
 func TestMaybeOfferSessionImport_InteractiveUsesSelection(t *testing.T) {
-	dir := t.TempDir()
-	testutil.InitRepo(t, dir)
-	t.Chdir(dir)
+	importTestRepo(t)
 	// Force interactive so the prompt branch is taken.
 	t.Setenv("ENTIRE_TEST_TTY", "1")
 
@@ -266,7 +278,7 @@ func TestMaybeOfferSessionImport_InteractiveUsesSelection(t *testing.T) {
 		func(_ context.Context, _ io.Writer, e []eligibleImport) ([]eligibleImport, error) {
 			return e[:1], nil // user picks only the first
 		},
-		func(_ context.Context, _ io.Writer, _ string, sel []eligibleImport) { ran = sel },
+		func(_ context.Context, _ io.Writer, _, _ string, sel []eligibleImport) { ran = sel },
 	)
 
 	maybeOfferSessionImport(context.Background(), io.Discard, nil, EnableOptions{}, true)
@@ -287,7 +299,7 @@ func TestMaybeOfferSessionImport_EmptySelectionSkips(t *testing.T) {
 			return []eligibleImport{{displayName: testAgentClaude, sessionCount: 3}}
 		},
 		func(context.Context, io.Writer, []eligibleImport) ([]eligibleImport, error) { return nil, nil },
-		func(context.Context, io.Writer, string, []eligibleImport) { runCalled = true },
+		func(context.Context, io.Writer, string, string, []eligibleImport) { runCalled = true },
 	)
 
 	maybeOfferSessionImport(context.Background(), io.Discard, nil, EnableOptions{}, true)
@@ -298,9 +310,7 @@ func TestMaybeOfferSessionImport_EmptySelectionSkips(t *testing.T) {
 
 func TestRunSelectedImports_UnsatisfiablePolicySkips(t *testing.T) {
 	// Not parallel: chdirs into a temp repo and reads CWD-based git state.
-	dir := t.TempDir()
-	testutil.InitRepo(t, dir)
-	t.Chdir(dir)
+	dir := importTestRepo(t)
 	ctx := context.Background()
 
 	// Install a checkpoint policy this CLI cannot satisfy (a future format).
@@ -319,7 +329,7 @@ func TestRunSelectedImports_UnsatisfiablePolicySkips(t *testing.T) {
 	// A nil importer would panic if the import loop ran, so the gate returning
 	// before the loop is exactly what keeps this from blowing up.
 	var buf bytes.Buffer
-	runSelectedImports(ctx, &buf, dir, []eligibleImport{{displayName: testAgentClaude}})
+	runSelectedImports(ctx, &buf, dir, testutil.GetHeadHash(t, dir), []eligibleImport{{displayName: testAgentClaude}})
 
 	if got := buf.String(); !strings.Contains(got, "skipping agent history import") {
 		t.Errorf("expected a skip note for an unsatisfiable checkpoint policy, got %q", got)
@@ -340,7 +350,7 @@ func TestMaybeOfferSessionImport_PromptErrorIsBestEffort(t *testing.T) {
 		func(context.Context, io.Writer, []eligibleImport) ([]eligibleImport, error) {
 			return nil, errors.New("terminal exploded")
 		},
-		func(context.Context, io.Writer, string, []eligibleImport) { runCalled = true },
+		func(context.Context, io.Writer, string, string, []eligibleImport) { runCalled = true },
 	)
 
 	// A prompt failure must never fail enable: the offer is best-effort, so this
@@ -424,7 +434,7 @@ func TestRunSelectedImports_NonTTYProgressLines(t *testing.T) {
 	agentName := string(claudeImp.AgentType())
 
 	var buf bytes.Buffer
-	runSelectedImports(ctx, &buf, dir, []eligibleImport{{imp: imp, displayName: agentName}})
+	runSelectedImports(ctx, &buf, dir, testutil.GetHeadHash(t, dir), []eligibleImport{{imp: imp, displayName: agentName}})
 	out := buf.String()
 
 	if strings.ContainsRune(out, '\x1b') {
@@ -526,13 +536,13 @@ func TestRunSelectedImports_NonTTYProgressLines_Reimport(t *testing.T) {
 	}}
 
 	// First pass actually imports; discard its output.
-	runSelectedImports(ctx, io.Discard, dir, selected)
+	runSelectedImports(ctx, io.Discard, dir, testutil.GetHeadHash(t, dir), selected)
 
 	// Second pass: every turn is already imported, so agentimport.Run's loop
 	// only ever calls TurnSkipped for it — this is the scenario that used to
 	// leave a TTY reporter frozen at "turn 0/M".
 	var buf bytes.Buffer
-	runSelectedImports(ctx, &buf, dir, selected)
+	runSelectedImports(ctx, &buf, dir, testutil.GetHeadHash(t, dir), selected)
 	out := buf.String()
 
 	if strings.ContainsRune(out, '\x1b') {
@@ -588,7 +598,7 @@ func TestRunSelectedImports_InterruptedStopsBeforeNextAgent(t *testing.T) {
 
 	var secondReached bool
 	var buf bytes.Buffer
-	runSelectedImports(ctx, &buf, dir, []eligibleImport{
+	runSelectedImports(ctx, &buf, dir, testutil.GetHeadHash(t, dir), []eligibleImport{
 		// The first agent's import is interrupted as it starts; the second must
 		// never be reached.
 		{imp: fixedDiscoverImporter{Importer: claudeImp, sessions: sessions, onDiscover: cancel}, displayName: testAgentClaude},

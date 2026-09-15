@@ -40,9 +40,11 @@ func (s *httpGitServer) tokenEnv(token string) []string {
 
 // plainGitPushEnv is tokenEnv plus the Authorization header a plain `git push`
 // needs to reach this server. The backend requires a non-empty Authorization
-// header on receive-pack and answers 401 without a WWW-Authenticate challenge,
-// so git never offers credentials on its own; ENTIRE_CHECKPOINT_TOKEN covers
-// only Entire's own checkpoint pushes. http.extraHeader supplies one
+// header on receive-pack, and the test environment has no credential helper
+// and no terminal to prompt at, so git has nothing to send — the 401 it gets
+// back carries no WWW-Authenticate challenge either, so there is not even a
+// scheme to answer. ENTIRE_CHECKPOINT_TOKEN covers only Entire's own checkpoint
+// pushes, not the user's code push. http.extraHeader supplies a header
 // unconditionally — the same mechanism appendCheckpointTokenEnv uses, which
 // appends at the next free index and so coexists with this entry.
 //

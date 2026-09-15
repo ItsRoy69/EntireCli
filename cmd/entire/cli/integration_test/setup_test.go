@@ -10,8 +10,10 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
+	"github.com/entireio/cli/cmd/entire/cli/execx"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
 )
 
@@ -97,15 +99,25 @@ func TestMain(m *testing.M) {
 	}
 
 	// Warm the binary before any test deadline is running. First exec of a
-	// freshly built 65MB binary costs 2.1-2.5s on macOS (page-in plus codesign
-	// validation) against 0.03s once warm, and the build is immediately above —
-	// so otherwise the first test to spawn it pays that inside its own timeout,
-	// which is how a handshake budget in an unrelated test starts failing when
-	// this package grows. A failed warm-up only restores that, so it warns.
-	warmCmd := exec.CommandContext(context.Background(), testBinaryPath, "--version")
+	// freshly built ~65MB binary costs ~0.6s idle on darwin/arm64 (page-in plus
+	// codesign validation, once per newly written file) and several seconds
+	// under this suite's own parallel -race load, against 0.03s once warm. The
+	// build is immediately above, so otherwise the first test to spawn the
+	// binary pays that inside its own timeout — and the victim is whoever the
+	// scheduler starts first. TestExternalCommand_SigintReachesPlugin allows 3s
+	// for its plugin to signal ready, which is the budget that actually broke.
+	//
+	// A failed warm-up only restores that previous behaviour, so it warns
+	// rather than exiting: an optimization must not become a new way for the
+	// whole package to fail. The bound is here for the same reason — a hang
+	// would otherwise stall the package until `go test -timeout` panics it,
+	// pointing at TestMain rather than at the cause.
+	warmCtx, cancelWarm := context.WithTimeout(context.Background(), 60*time.Second)
+	warmCmd := execx.NonInteractive(warmCtx, testBinaryPath, "--version")
 	if warmOutput, warmErr := warmCmd.CombinedOutput(); warmErr != nil {
 		fmt.Fprintf(os.Stderr, "warning: could not warm CLI binary: %v\nOutput: %s\n", warmErr, warmOutput)
 	}
+	cancelWarm()
 
 	// Run tests
 	code := m.Run()

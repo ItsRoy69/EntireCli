@@ -2,13 +2,14 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
-	"github.com/entireio/cli/cmd/entire/cli/agentimport"
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
 
+	"github.com/entireio/cli/cmd/entire/cli/agentimport"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/strategy"
 )
@@ -21,13 +22,14 @@ import (
 // This function is the source of truth for the order; the architecture docs
 // describe it but defer here.
 //
-// Every rejection is logged, and the final error names the refs tried. A
-// candidate is now skippable rather than merely absent — origin's tip can be
-// present as a ref but missing as an object after a prune or a partial fetch —
-// so without this an import silently anchors to local HEAD instead, and the
-// single Debug line at the call site records only the winner. Import decisions
-// are one-shot: nothing re-derives them later, so an unlogged demotion
-// destroys the only evidence of why a checkpoint points where it does.
+// A candidate can now be SKIPPED rather than merely absent — origin's tip can
+// exist as a ref while its object does not, after a prune or a partial fetch —
+// and the caller is told nothing when a lower-priority candidate then wins.
+// Import decisions are one-shot: nothing re-derives them later, so that
+// demotion is logged at Warn, because it is the only record of why a
+// checkpoint points where it does. A merely absent ref stays at Debug: a repo
+// with no origin is ordinary, and warning about it would be noise on every
+// import in a remoteless repo.
 func resolveImportLinkCommitSHA(ctx context.Context, repo *git.Repository) (string, error) {
 	var refs []plumbing.ReferenceName
 	if name := strategy.GetDefaultBranchName(repo); name != "" {
@@ -40,15 +42,22 @@ func resolveImportLinkCommitSHA(ctx context.Context, repo *git.Repository) (stri
 		tried = append(tried, name.Short())
 		ref, err := repo.Reference(name, true)
 		if err != nil {
-			logging.Debug(ctx, "import: anchor candidate unresolved", "ref", name.String(), "error", err)
+			logging.Debug(ctx, "import: anchor candidate absent", "ref", name.String(), "error", err)
 			continue
 		}
 		sha, err := agentimport.ValidateAnchorCommit(repo, ref.Hash().String())
-		if err != nil {
-			logging.Debug(ctx, "import: anchor candidate rejected", "ref", name.String(), "target", ref.Hash().String(), "error", err)
-			continue
+		if err == nil {
+			return sha, nil
 		}
-		return sha, nil
+		// Not about this candidate: the object format is unreadable, so every
+		// remaining candidate fails the same way and the refs are not the
+		// problem. Returning it keeps the cause in front of the user instead
+		// of recommending they fetch code history that is already there.
+		if errors.Is(err, agentimport.ErrAnchorRepoConfig) {
+			return "", fmt.Errorf("cannot import sessions: %w", err)
+		}
+		logging.Warn(ctx, "import: anchor candidate rejected; falling through to a lower-priority ref",
+			"ref", name.String(), "target", ref.Hash().String(), "error", err)
 	}
-	return "", fmt.Errorf("cannot import sessions without a valid anchor commit (tried %s): create a commit or fetch the repository's code history, then retry", strings.Join(tried, ", "))
+	return "", fmt.Errorf("cannot import sessions without a valid anchor commit (tried %s): create a commit or fetch the repository's code history", strings.Join(tried, ", "))
 }
