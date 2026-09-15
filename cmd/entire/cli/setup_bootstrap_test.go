@@ -433,36 +433,6 @@ func writeTempFile(path, content string) error {
 	return os.WriteFile(path, []byte(content), 0o600)
 }
 
-// ghFailingRunner wraps another bootstrapRunner and forces all `gh`
-// invocations to fail, while letting real `git` calls through. This
-// lets tests deterministically exercise the "gh unavailable" path
-// regardless of whether `gh` is installed/authenticated on the host.
-type ghFailingRunner struct {
-	inner bootstrapRunner
-}
-
-func (r ghFailingRunner) Run(ctx context.Context, name string, args ...string) (string, error) {
-	if name == "gh" {
-		return "", errors.New("gh not available (test)")
-	}
-	return r.inner.Run(ctx, name, args...)
-}
-
-func (r ghFailingRunner) RunInDir(ctx context.Context, dir, name string, args ...string) (string, error) {
-	if name == "gh" {
-		return "", errors.New("gh not available (test)")
-	}
-	return r.inner.RunInDir(ctx, dir, name, args...)
-}
-
-// TestBootstrap_FreshMachine_NoIdentity_RealGit verifies that a fresh
-// machine without any git identity configured fails cleanly in
-// non-interactive mode with a helpful error message, instead of letting
-// `git commit` fail with a confusing "please tell me who you are" stderr.
-//
-// Uses a gh-failing runner wrapper rather than PATH manipulation so the
-// test isn't sensitive to whether `gh` + GH_TOKEN/GITHUB_TOKEN are set
-// on the host.
 // Bootstrap no longer resolves the git identity: that moved to the enable
 // command, which runs the preflight after agent selection and before the
 // initial commit (needsIdentity covers the bootstrap-with-commit case). This
