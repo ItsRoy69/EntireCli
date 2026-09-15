@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -55,7 +56,9 @@ func tableCells(out string) [][]string {
 // --region`, HOST feeds `repo mirror create` / `repo create --cluster-host` /
 // `repo clone --cluster`, CLUSTER is the slug placements are keyed by. Rows are
 // sorted by region then slug, and a publicUrl that cannot be reduced to a safe
-// bare host renders dashed rather than spoofable.
+// bare host renders dashed rather than spoofable. A catalog holding a
+// non-default cluster gains a DEFAULT column, so a reader can see which
+// cluster a region falls back to when a command names the region alone.
 //
 // Not parallel: runCoreCmd swaps the package-level activeCoreClient seam.
 func TestClusterList_RendersRegionsAndHosts(t *testing.T) {
@@ -66,18 +69,44 @@ func TestClusterList_RendersRegionsAndHosts(t *testing.T) {
 	require.Empty(t, errOut)
 
 	require.Equal(t, [][]string{
+		{"REGION", "CLUSTER", "HOST", "DEFAULT"},
+		{"eu", "aws-eu", "aws-eu-central-1.entire.io", "yes"},
+		{"us", "aws-us-east", "aws-us-east-2.entire.io", "yes"},
+		{"us", "aws-us-west", "aws-us-west-2.entire.io", "-"},
+		{"us", "poisoned", "-", "-"},
+	}, tableCells(out))
+}
+
+// With one cluster per region every cluster is its region's default, so a
+// DEFAULT column would read yes on every row and say nothing. It is added only
+// when the catalog holds a non-default cluster; this is the live catalog's
+// shape today.
+//
+// Not parallel: runCoreCmd swaps the package-level activeCoreClient seam.
+func TestClusterList_OneClusterPerRegionOmitsDefaultColumn(t *testing.T) {
+	srv := serveClusterList(t, []coreapi.Cluster{
+		{Slug: "aws-us-east", Jurisdiction: "us", PublicUrl: "https://aws-us-east-2.entire.io", IsDefault: true},
+		{Slug: "aws-eu", Jurisdiction: "eu", PublicUrl: "https://aws-eu-central-1.entire.io", IsDefault: true},
+	})
+
+	out, errOut, err := runCoreCmd(t, newClusterCmd, srv.URL, "list")
+	require.NoError(t, err)
+	require.Empty(t, errOut)
+
+	require.Equal(t, [][]string{
 		{"REGION", "CLUSTER", "HOST"},
 		{"eu", "aws-eu", "aws-eu-central-1.entire.io"},
 		{"us", "aws-us-east", "aws-us-east-2.entire.io"},
-		{"us", "aws-us-west", "aws-us-west-2.entire.io"},
-		{"us", "poisoned", "-"},
 	}, tableCells(out))
 }
 
 // --json is the wire model, in the same order as the table: every catalog
-// field survives (apiUrl and isDefault included, both of which the table
-// omits), and publicUrl is passed through verbatim — validation belongs to the
-// consumer that turns it into a host.
+// field survives (apiUrl included, which the table omits, and isDefault, which
+// the table shows only when some cluster is not one), and publicUrl is passed
+// through verbatim. Merged into each object is a synthesized `host`, the same
+// validated bare host the table's HOST column shows, so a script gets the safe
+// value without re-implementing hostFromPublicURL; where publicUrl fails
+// validation the field is absent rather than dashed or spoofable.
 //
 // Not parallel: runCoreCmd swaps the package-level activeCoreClient seam.
 func TestClusterList_JSONIsTheSortedWireModel(t *testing.T) {
@@ -100,6 +129,35 @@ func TestClusterList_JSONIsTheSortedWireModel(t *testing.T) {
 	require.True(t, got[1].IsDefault)
 	require.False(t, got[2].IsDefault)
 	require.Equal(t, "https://aws-us-east-2.entire.io@evil.com", got[3].PublicUrl)
+
+	var objs []map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal([]byte(out), &objs))
+	require.JSONEq(t, `"aws-eu-central-1.entire.io"`, string(objs[0]["host"]), "trailing slash and scheme reduced to the bare host")
+	require.JSONEq(t, `"aws-us-east-2.entire.io"`, string(objs[1]["host"]))
+	require.NotContains(t, objs[3], "host", "an unsafe publicUrl gets no host, not a placeholder")
+	require.NotContains(t, objs[0], "AdditionalProps", "the wire encoder, not reflection, must produce the object")
+}
+
+// clusterJSON writes its validated host only when the object has no host of
+// its own, so the day the catalog gains a first-class `host` the synthesis
+// silently stops and the raw server value flows through --json unchecked —
+// the state finding 1 on this command's trail flagged. This pins the
+// assumption: when it fails, decide whether to validate the server's field or
+// retire the synthesis, rather than deleting the test.
+func TestClusterWireModelHasNoHostField(t *testing.T) {
+	t.Parallel()
+	_, has := reflect.TypeOf(coreapi.Cluster{}).FieldByName("Host")
+	require.False(t, has, "coreapi.Cluster gained a Host field; clusterJSON's synthesized host is now shadowed by an unvalidated server value")
+}
+
+// Not parallel: runCoreCmd swaps the package-level activeCoreClient seam.
+func TestClusterList_EmptyCatalogJSONIsEmptyArray(t *testing.T) {
+	srv := serveClusterList(t, nil)
+
+	out, errOut, err := runCoreCmd(t, newClusterCmd, srv.URL, "list", "--json")
+	require.NoError(t, err)
+	require.Empty(t, errOut)
+	require.JSONEq(t, "[]", out)
 }
 
 // Not parallel: runCoreCmd swaps the package-level activeCoreClient seam.

@@ -88,9 +88,17 @@ the commands are always runnable in every build.
   `repo mirror create` and `repo clone --cluster`, reduced through
   `hostFromPublicURL` so a publicUrl that fails validation renders `-` rather
   than a spoofable host. `--json` is the wire model, `apiUrl` and `isDefault`
-  included; neither is a table column, because the CLI dials the API URL
-  itself and the default only separates clusters within a region that has
-  several. The catalog carries no health, capacity or usage data — nothing
+  included, plus a synthesized `host` merged into each object
+  (`clusterJSON`, via the additive-only `mergeSynthesizedField` that `repo
+  create` uses for `remote`): the same validated host the table shows, absent
+  rather than dashed when `publicUrl` fails validation, so a script never has
+  to re-implement the guard over the raw URL. `apiUrl` is never a table
+  column, because the CLI dials the API URL itself. `isDefault` becomes a
+  DEFAULT column only when the catalog holds a non-default cluster
+  (`clusterTable`): that is the catalog in which a reader needs telling where
+  a region falls back to when a command names the region alone, and in a
+  catalog with one cluster per region the column would read yes on every
+  row. The catalog carries no health, capacity or usage data — nothing
   server-side does — and hidden or decommissioned clusters never reach it.
 - `org`: control-plane organization management — `create`, `list`, `get`, `delete`
 - `project`: control-plane project management — `create`, `list`, `get`, `delete`
