@@ -11,7 +11,6 @@ on:
   push:
     branches:
       - main
-      - feat/e2e-controlplane # TEMPORARY: validate the workflow from its branch; remove before merge
 
 # One shared test account with a three-org quota: never two runs at once, and
 # never cancel one mid-flight — a cancelled run skips t.Cleanup and leaks the
