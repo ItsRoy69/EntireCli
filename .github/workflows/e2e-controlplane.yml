@@ -2,12 +2,6 @@ name: E2E Control Plane
 
 on:
   workflow_dispatch:
-    inputs:
-      test:
-        description: 'Test name filter (regex; empty runs the whole package)'
-        required: false
-        type: string
-        default: ''
   push:
     branches:
       - main
@@ -49,8 +43,7 @@ jobs:
           E2E_GH_USERNAME: ${{ secrets.E2E_GH_USERNAME }}
           E2E_GH_PASSWORD: ${{ secrets.E2E_GH_PASSWORD }}
           E2E_GH_TOTP_SECRET: ${{ secrets.E2E_GH_TOTP_SECRET }}
-          TEST_FILTER: ${{ inputs.test }}
-        run: mise run test:e2e:controlplane "$TEST_FILTER"
+        run: mise run test:e2e:controlplane
 
       - name: Upload artifacts
         if: always()
