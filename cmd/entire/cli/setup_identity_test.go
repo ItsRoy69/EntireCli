@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -516,5 +518,32 @@ func argsMatch(name string, args []string) func(fakeCall) bool {
 			}
 		}
 		return true
+	}
+}
+
+// The identity preflight has to cover the setup flow, not just `entire enable`:
+// bare `entire` (root.go) and `entire agent` (runAgentMenu) both reach it for
+// the same "existing repo, not set up yet" case, install hooks and settings,
+// and would otherwise leave commits attributed to an unknown author.
+func TestRunSetupFlow_PreflightRunsBeforeAnyWrite(t *testing.T) {
+	repoDir := setupTestRepo(t)
+	clearLocalGitIdentity(t, repoDir)
+
+	preflightErr := errors.New("identity unavailable")
+	called := 0
+	err := runSetupFlowWithPreflight(t.Context(), io.Discard, EnableOptions{}, func() error {
+		called++
+		return preflightErr
+	})
+	if !errors.Is(err, preflightErr) {
+		t.Fatalf("error = %v, want the preflight's error", err)
+	}
+	if called != 1 {
+		t.Fatalf("preflight calls = %d, want 1", called)
+	}
+	// A failed preflight must leave the repo untouched — same guarantee
+	// TestEnableCmd_IdentityFailureLeavesSetupAbsent makes for enable.
+	if _, statErr := os.Stat(filepath.Join(repoDir, ".entire")); !os.IsNotExist(statErr) {
+		t.Fatalf(".entire exists after a failed preflight (stat err = %v)", statErr)
 	}
 }

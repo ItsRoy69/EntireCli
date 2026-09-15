@@ -441,15 +441,63 @@ func selectAgentsForSetup(ctx context.Context, w io.Writer, opts EnableOptions) 
 	return agents, nil
 }
 
-// runSetupFlow runs the first-time setup flow (agent selection + hooks + settings).
-// Shared by root command (no args), `entire configure`, and `entire enable` on fresh repos.
+// runSetupFlow runs the first-time setup flow (agent selection + identity +
+// hooks + settings). Shared by the root command (no args), `entire configure`,
+// and `entire agent`.
+//
+// The identity preflight belongs here, not only in `entire enable`: these
+// callers reach the same end state — hooks installed, settings written, commits
+// flowing — for the same "existing repo, not set up yet" case, so a repo
+// onboarded by bare `entire` would otherwise keep attributing commits to an
+// unknown author, which is the bug the preflight exists to fix.
 func runSetupFlow(ctx context.Context, w io.Writer, opts EnableOptions) error {
+	return runSetupFlowWithPreflight(ctx, w, opts, defaultIdentityPreflight(ctx, w))
+}
+
+// runSetupFlowWithPreflight is runSetupFlow with the identity step injected, so
+// tests can drive the ordering without reaching the network. The ordering is
+// the point: select agents, resolve identity, then write. The preflight sits
+// between the two because it may fail or start a login, and neither should
+// happen after hooks and settings are already on disk.
+//
+// `entire enable` deliberately does not route through here. It has to install
+// its logger between the preflight and the writes — late enough that a rejected
+// enable leaves no .entire/logs behind, and its context has to be re-read after
+// that — so it spells the same three steps out itself, sharing
+// selectAgentsForSetup rather than this wrapper.
+func runSetupFlowWithPreflight(ctx context.Context, w io.Writer, opts EnableOptions, preflight func() error) error {
 	agents, err := selectAgentsForSetup(ctx, w, opts)
 	if err != nil {
 		return err
 	}
+	if preflight != nil {
+		if err := preflight(); err != nil {
+			return err
+		}
+	}
 
 	return runEnableInteractive(ctx, w, agents, opts)
+}
+
+// defaultIdentityPreflight builds the identity step for callers that have no
+// command flags to thread through. It resolves the worktree root itself and is
+// a no-op when that fails: these entry points only run inside a git repo, so a
+// failure here means something is wrong that setup will report in its own
+// terms rather than as an identity error.
+func defaultIdentityPreflight(ctx context.Context, w io.Writer) func() error {
+	return func() error {
+		repoRoot, rootErr := paths.WorktreeRoot(ctx)
+		if rootErr != nil {
+			// Callers reach here only from inside a git repo (root.go checks
+			// first), so this is unreachable in practice. If it ever is not,
+			// setup's own prerequisite handling gives the accurate message —
+			// failing here instead would report a missing identity for what is
+			// really a missing repo.
+			return nil //nolint:nilerr // deliberate skip; see above
+		}
+		return ensureGitIdentity(ctx, w, execRunner{}, repoRoot,
+			newEntireGitIdentityResolver(w, os.Stderr, false))
+	}
 }
 
 // selectAllAgents is a selectFn that selects all available agents.
