@@ -22,10 +22,12 @@ import (
 // deviceLogin runs `entire login --device` against production and completes
 // the approval in a headless browser: GitHub sign-in as the test user with
 // its password and authenticator code, then the Authorize button on Entire's
-// device page. The returned error never carries the password, the TOTP
-// secret, the device code, or the approval URL.
-func deviceLogin(ctx context.Context, username, password, totpSecret string) error {
+// device page. The login runs in dir, outside any repository checkout. The
+// returned error never carries the password, the TOTP secret, the device
+// code, or the approval URL.
+func deviceLogin(ctx context.Context, dir, username, password, totpSecret string) error {
 	cmd := execx.NonInteractive(ctx, entire.BinPath(), "login", "--device")
+	cmd.Dir = dir
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
 		return fmt.Errorf("stdout pipe: %w", err)
@@ -155,11 +157,15 @@ func approveInBrowser(ctx context.Context, exited <-chan struct{}, approvalURL, 
 }
 
 // pageName is a page URL without its query, which on the device page carries
-// the code.
+// the code. A host-less URL such as about:blank is named by scheme and opaque
+// part instead of the raw string, which could carry parameters.
 func pageName(raw string) string {
 	u, err := url.Parse(raw)
 	if err != nil {
 		return "an unparseable page"
+	}
+	if u.Host == "" && u.Path == "" {
+		return u.Scheme + ":" + u.Opaque
 	}
 	return u.Host + u.Path
 }
