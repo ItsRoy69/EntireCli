@@ -11,7 +11,7 @@ import (
 )
 
 // Control-plane commands reference orgs and projects by their parent ULID in
-// many places (repo create --project, project create --owner, grant org/project
+// many places (repo create --project, project create --owner, org/project grant
 // <id>, …). ULIDs are unfriendly to type, so these refs also accept a human
 // name: looksLikeULID decides which form was given, and the resolveXRef helpers
 // turn a name into its ULID. A ULID is always passed straight through with no
@@ -298,6 +298,20 @@ func resolveRepoPathRef(ctx context.Context, c repoRefClient, ref, projectRef st
 		return "", projectMismatchErr(projectRef, project, ref)
 	}
 	return resolveRepoInProject(ctx, c, repoName, projID)
+}
+
+// resolveRepoPath resolves the one repo spelling `repo grant` accepts, the
+// native /et/<project>/<repo> path. A ULID or a bare name is refused: the path
+// names the repo the way the API and `repo clone` do, and access management
+// should not need a lookup to know which project it is touching. The grammar
+// is parseNativeCloneRef, shared with clone; the resolution is the same
+// project-then-repo lookup resolveNativeRepo makes.
+func resolveRepoPath(ctx context.Context, c repoRefClient, ref string) (string, error) {
+	project, repoName, err := parseNativeCloneRef(ref)
+	if err != nil {
+		return "", fmt.Errorf("repo %q must be a /%s/<project>/<repo> path: %w", ref, nativeCloneForge, err)
+	}
+	return resolveRepoRef(ctx, c, repoName, project)
 }
 
 func projectMismatchErr(projectRef, project, ref string) error {
