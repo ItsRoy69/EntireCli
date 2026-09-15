@@ -36,9 +36,15 @@ const envTokenIdentityGuidance = "ENTIRE_TOKEN could not authenticate an Entire 
 type gitIdentityResolver func(context.Context) (*authProfile, error)
 type identityResolverFactory func(io.Writer, io.Writer, bool) gitIdentityResolver
 
+// activeContextProvider resolves the acting login context. It is the seam for
+// cliauth.ActiveContext, which already applies the `--context`/$ENTIRE_CONTEXT
+// selection and rejects a context carrying no CoreURL — so this path neither
+// re-finds the active context by name nor re-derives that guard.
+type activeContextProvider func() (*contexts.Context, bool, error)
+
 type identityProfileDependencies struct {
 	lookupEnv     func(string) (string, bool)
-	contexts      contextsProvider
+	activeContext activeContextProvider
 	resolveLogin  loginTokenResolver
 	fetchProfile  profileFetcher
 	allowInsecure bool
@@ -58,7 +64,7 @@ type identityRecoveryDependencies struct {
 func defaultIdentityProfileDependencies(insecure bool) identityProfileDependencies {
 	return identityProfileDependencies{
 		lookupEnv:     os.LookupEnv,
-		contexts:      cliauth.Contexts,
+		activeContext: cliauth.ActiveContext,
 		resolveLogin:  cliauth.RefreshedLoginToken,
 		fetchProfile:  defaultFetchProfile,
 		allowInsecure: insecure,
@@ -187,24 +193,15 @@ func resolveEntireIdentityProfile(ctx context.Context, deps identityProfileDepen
 		return identityProfileResult{profile: profile, loginServer: target.coreURL}, nil
 	}
 
-	all, current, err := deps.contexts()
+	active, ok, err := deps.activeContext()
 	if err != nil {
 		return identityProfileResult{}, err
 	}
 	result := identityProfileResult{loginServer: api.DefaultAuthBaseURL}
-	var active *contexts.Context
-	for _, candidate := range all {
-		if candidate != nil && candidate.Name == current {
-			active = candidate
-			break
-		}
-	}
-	if active == nil {
+	if !ok {
 		return result, errEntireLoginRequired
 	}
-	if strings.TrimSpace(active.CoreURL) != "" {
-		result.loginServer = active.CoreURL
-	}
+	result.loginServer = active.CoreURL
 	if !deps.allowInsecure {
 		if err := api.RequireSecureURL(active.CoreURL); err != nil {
 			return result, fmt.Errorf("context login server URL check: %w", err)

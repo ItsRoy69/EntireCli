@@ -222,11 +222,9 @@ func TestResolveEntireIdentityProfile(t *testing.T) {
 	t.Run("stored context", func(t *testing.T) {
 		t.Parallel()
 		deps := identityProfileDependencies{
-			lookupEnv: func(string) (string, bool) { return "", false },
-			contexts: func() ([]*contexts.Context, string, error) {
-				return []*contexts.Context{ctxEntry}, "work", nil
-			},
-			resolveLogin: func(context.Context, *contexts.Context) (string, error) { return "stored-token", nil },
+			lookupEnv:     func(string) (string, bool) { return "", false },
+			activeContext: func() (*contexts.Context, bool, error) { return ctxEntry, true, nil },
+			resolveLogin:  func(context.Context, *contexts.Context) (string, error) { return "stored-token", nil },
 			fetchProfile: func(_ context.Context, coreURL, token string) (*authProfile, error) {
 				if coreURL != ctxEntry.CoreURL || token != "stored-token" {
 					t.Fatalf("profile target = %q token %q", coreURL, token)
@@ -245,11 +243,9 @@ func TestResolveEntireIdentityProfile(t *testing.T) {
 		insecureContext := &contexts.Context{Name: "local", CoreURL: "http://127.0.0.1:8787"}
 		fetchCalls := 0
 		deps := identityProfileDependencies{
-			lookupEnv: func(string) (string, bool) { return "", false },
-			contexts: func() ([]*contexts.Context, string, error) {
-				return []*contexts.Context{insecureContext}, "local", nil
-			},
-			resolveLogin: func(context.Context, *contexts.Context) (string, error) { return "stored-token", nil },
+			lookupEnv:     func(string) (string, bool) { return "", false },
+			activeContext: func() (*contexts.Context, bool, error) { return insecureContext, true, nil },
+			resolveLogin:  func(context.Context, *contexts.Context) (string, error) { return "stored-token", nil },
 			fetchProfile: func(context.Context, string, string) (*authProfile, error) {
 				fetchCalls++
 				return profile, nil
@@ -274,9 +270,9 @@ func TestResolveEntireIdentityProfile(t *testing.T) {
 				}
 				return raw, true
 			},
-			contexts: func() ([]*contexts.Context, string, error) {
+			activeContext: func() (*contexts.Context, bool, error) {
 				t.Fatal("stored contexts must not be read in ENTIRE_TOKEN mode")
-				return nil, "", nil
+				return nil, false, nil
 			},
 			fetchProfile: func(_ context.Context, coreURL, token string) (*authProfile, error) {
 				if coreURL != "https://env-core.example.test" || token != raw {
@@ -295,11 +291,9 @@ func TestResolveEntireIdentityProfile(t *testing.T) {
 		t.Parallel()
 		refreshErr := errors.New("credential store unavailable")
 		deps := identityProfileDependencies{
-			lookupEnv: func(string) (string, bool) { return "", false },
-			contexts: func() ([]*contexts.Context, string, error) {
-				return []*contexts.Context{ctxEntry}, "work", nil
-			},
-			resolveLogin: func(context.Context, *contexts.Context) (string, error) { return "", refreshErr },
+			lookupEnv:     func(string) (string, bool) { return "", false },
+			activeContext: func() (*contexts.Context, bool, error) { return ctxEntry, true, nil },
+			resolveLogin:  func(context.Context, *contexts.Context) (string, error) { return "", refreshErr },
 			fetchProfile: func(context.Context, string, string) (*authProfile, error) {
 				t.Fatal("profile must not be fetched after refresh failure")
 				return nil, errors.New("unexpected profile fetch")
@@ -308,6 +302,34 @@ func TestResolveEntireIdentityProfile(t *testing.T) {
 		_, err := resolveEntireIdentityProfile(t.Context(), deps)
 		if !errors.Is(err, refreshErr) || errors.Is(err, errEntireLoginRequired) {
 			t.Fatalf("error = %v, want original operational failure", err)
+		}
+	})
+
+	// cliauth.ActiveContext reports a context carrying no CoreURL as "none
+	// acting" rather than returning an unusable pointer. Asserted here because
+	// this path used to find the active context by name itself and had no such
+	// guard: it would go on to mint a token against an empty core and surface
+	// the resulting transport error instead of sending the user to log in.
+	t.Run("active context without a core URL asks for login", func(t *testing.T) {
+		t.Parallel()
+		deps := identityProfileDependencies{
+			lookupEnv:     func(string) (string, bool) { return "", false },
+			activeContext: func() (*contexts.Context, bool, error) { return nil, false, nil },
+			resolveLogin: func(context.Context, *contexts.Context) (string, error) {
+				t.Fatal("must not resolve a token without an acting context")
+				return "", nil
+			},
+			fetchProfile: func(context.Context, string, string) (*authProfile, error) {
+				t.Fatal("must not fetch a profile without an acting context")
+				return nil, errors.New("unexpected profile fetch")
+			},
+		}
+		got, err := resolveEntireIdentityProfile(t.Context(), deps)
+		if !errors.Is(err, errEntireLoginRequired) {
+			t.Fatalf("error = %v, want errEntireLoginRequired", err)
+		}
+		if got.loginServer != cliapi.DefaultAuthBaseURL {
+			t.Fatalf("loginServer = %q, want the default so the login prompt names a real server", got.loginServer)
 		}
 	})
 
