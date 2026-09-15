@@ -338,6 +338,43 @@ func TestResolveEntireIdentityProfile(t *testing.T) {
 		}
 	})
 
+	// The env-token branch has no RequireSecureURL call, which reads like a
+	// missing TLS check next to the stored-context branch that has one. It is
+	// not: the core URL comes from the token's own aud claim, and
+	// CoreURLFromEnvToken -> validateCoreAudience hard-rejects any scheme but
+	// https before this code ever sees it (auth/env_token.go). The stored
+	// branch needs its own check because contexts.json is user-editable and may
+	// legitimately hold an http dev core — which is what --insecure-http-auth
+	// is for. No such escape exists for an env token, at any call site.
+	//
+	// Asserted here because the "missing check" reading has been reported
+	// twice; if validateCoreAudience is ever relaxed, this fails rather than
+	// the reviewers being right the third time.
+	t.Run("http env token is refused before the bearer is sent", func(t *testing.T) {
+		t.Parallel()
+		raw := makeJWT(t, `{"alg":"RS256"}`, `{"aud":"http://insecure-core.example.test"}`)
+		fetchCalls := 0
+		deps := identityProfileDependencies{
+			lookupEnv: func(string) (string, bool) { return raw, true },
+			fetchProfile: func(context.Context, string, string) (*authProfile, error) {
+				fetchCalls++
+				return nil, errors.New("must not be reached")
+			},
+			// Even with the insecure opt-in: an http env token is never allowed.
+			allowInsecure: true,
+		}
+		_, err := resolveEntireIdentityProfile(t.Context(), deps)
+		if !errors.Is(err, errEntireEnvTokenRejected) {
+			t.Fatalf("error = %v, want errEntireEnvTokenRejected", err)
+		}
+		if !strings.Contains(err.Error(), "must use https") {
+			t.Fatalf("error = %v, want the https refusal from validateCoreAudience", err)
+		}
+		if fetchCalls != 0 {
+			t.Fatalf("profile fetch calls = %d, want 0 — the bearer must never leave", fetchCalls)
+		}
+	})
+
 	t.Run("rejected env token is distinguished from stored login expiry", func(t *testing.T) {
 		t.Parallel()
 		raw := makeJWT(t, `{"alg":"RS256"}`, `{"aud":"https://env-core.example.test"}`)
