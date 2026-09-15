@@ -194,9 +194,11 @@ func TestEnableOffersImport_AnchorlessRepoSkipsWithoutFailingEnable(t *testing.T
 	env.InitRepo() // Deliberately no commit: nothing to anchor an import to.
 	writeClaudeHistory(t, env)
 
-	// --import-history is the explicit opt-in, so this is the case where the
-	// user asked for an import that cannot happen — the one that must not be
-	// answered by failing setup.
+	// --import-history is set to make the intent explicit, not because the
+	// branch depends on it: the anchor gate runs above the opt-in check, so an
+	// anchorless repo prints the same thing either way. What this pins is that
+	// enable SURVIVES, which no unit test can show — its cousin calls a
+	// function returning nothing.
 	out, err := env.RunCLIWithError("enable", "--agent", agentClaudeCode, "--import-history", "--telemetry=false")
 	require.NoError(t, err, "an unanchorable import must not fail enable; got: %s", out)
 	require.Contains(t, out, "Ready.", "enable should still complete; got: %s", out)

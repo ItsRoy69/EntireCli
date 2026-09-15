@@ -36,21 +36,31 @@ import (
 func initRepoWithFormat(t *testing.T, format formatcfg.ObjectFormat) (*git.Repository, string) {
 	t.Helper()
 	dir := t.TempDir()
-	runGit := func(args ...string) string {
+	run := func(skippable bool, args ...string) string {
 		t.Helper()
 		cmd := exec.CommandContext(t.Context(), "git", args...)
 		cmd.Dir = dir
 		cmd.Env = testutil.GitIsolatedEnv()
 		out, err := cmd.CombinedOutput()
-		if err != nil {
+		if err == nil {
+			return strings.TrimSpace(string(out))
+		}
+		// Only the format-dependent steps may skip. Letting every git call skip
+		// means an unrelated breakage silently deletes a subtest — including the
+		// sha1 one, which no git can legitimately skip — and `go test` reports
+		// that as success. This test exists because its predecessor passed while
+		// testing nothing; it must not be able to do so again.
+		if skippable {
 			t.Skipf("git %v failed (no support for %s?): %v\n%s", args, format, err, out)
 		}
-		return strings.TrimSpace(string(out))
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+		return ""
 	}
-	runGit("init", "--object-format="+string(format), ".")
-	if got := runGit("rev-parse", "--show-object-format=storage"); got != string(format) {
+	run(true, "init", "--object-format="+string(format), ".")
+	if got := run(true, "rev-parse", "--show-object-format=storage"); got != string(format) {
 		t.Skipf("git initialized object format %q, not %s", got, format)
 	}
+	runGit := func(args ...string) string { t.Helper(); return run(false, args...) }
 	runGit("config", "user.name", "Test")
 	runGit("config", "user.email", "test@test.com")
 	runGit("config", "commit.gpgsign", "false")

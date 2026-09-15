@@ -70,6 +70,11 @@ func TestMaybeOfferSessionImport_AnchorlessRepoNeverPrompts(t *testing.T) {
 	dir := t.TempDir()
 	testutil.InitRepo(t, dir)
 	t.Chdir(dir)
+	// Force interactive, or the prompt seam below is unreachable and its
+	// t.Fatal is decoration: a non-interactive run returns at the no-opt-in
+	// branch before the prompt whether or not the anchor gate exists, so the
+	// test would pin only the notice and not the thing it is named for.
+	t.Setenv("ENTIRE_TEST_TTY", "1")
 
 	withImportSeams(t,
 		func(context.Context, []agent.Agent, string) []eligibleImport {

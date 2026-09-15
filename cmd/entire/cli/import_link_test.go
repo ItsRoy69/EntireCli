@@ -1,9 +1,13 @@
 package cli
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/entireio/cli/cmd/entire/cli/agentimport"
+	"github.com/entireio/cli/cmd/entire/cli/gitrepo"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
@@ -164,4 +168,33 @@ func TestResolveImportLinkCommitSHA_EmptyRepo(t *testing.T) {
 	got, err := resolveImportLinkCommitSHA(t.Context(), repo)
 	require.ErrorContains(t, err, "without a valid anchor commit")
 	require.Empty(t, got)
+}
+
+// A repository-config failure is not a verdict on any candidate: it fails
+// identically for every one, so the loop must stop rather than fall through and
+// end up telling the user to fetch code history that is already there. Pins both
+// the sentinel wiring and the message, since the whole point is that this
+// failure does NOT get the refs' remedy.
+func TestResolveImportLinkCommitSHA_ConfigFailureStopsInsteadOfBlamingRefs(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	testutil.InitRepo(t, dir)
+	testutil.WriteFile(t, dir, "f.txt", "init")
+	testutil.GitAdd(t, dir, "f.txt")
+	testutil.GitCommit(t, dir, "init")
+	repo, err := gitrepo.OpenPath(dir)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = repo.Close() })
+
+	// Corrupted after opening: the object format is read per validation, so this
+	// is what an unreadable config looks like at the moment the anchor is checked.
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".git", "config"), []byte("[[[not ini\n"), 0o600))
+
+	got, err := resolveImportLinkCommitSHA(t.Context(), repo)
+	require.Error(t, err)
+	require.Empty(t, got)
+	require.ErrorIs(t, err, agentimport.ErrAnchorRepoConfig,
+		"the sentinel must survive the wrap, or the caller cannot tell this from a bad ref")
+	require.NotContains(t, err.Error(), "create a commit or fetch",
+		"an unreadable config must not be answered with advice about refs")
 }

@@ -118,13 +118,13 @@ func importTestRepo(t *testing.T) string {
 func TestMaybeOfferSessionImport_ImportHistoryImportsAllWithoutPrompting(t *testing.T) {
 	// Not parallel: overrides seams and chdirs into a temp repo.
 	dir := importTestRepo(t)
-	_ = dir
 
 	eligible := []eligibleImport{
 		{displayName: testAgentClaude, sessionCount: 3},
 		{displayName: "Codex", sessionCount: 1},
 	}
 	var ran []eligibleImport
+	var anchor string
 	promptCalled := false
 	withImportSeams(t,
 		func(context.Context, []agent.Agent, string) []eligibleImport { return eligible },
@@ -132,7 +132,9 @@ func TestMaybeOfferSessionImport_ImportHistoryImportsAllWithoutPrompting(t *test
 			promptCalled = true
 			return nil, nil
 		},
-		func(_ context.Context, _ io.Writer, _, _ string, sel []eligibleImport) { ran = sel },
+		func(_ context.Context, _ io.Writer, _, gotAnchor string, sel []eligibleImport) {
+			ran, anchor = sel, gotAnchor
+		},
 	)
 
 	// --import-history is the explicit, non-interactive opt-in: it imports
@@ -144,6 +146,12 @@ func TestMaybeOfferSessionImport_ImportHistoryImportsAllWithoutPrompting(t *test
 	if len(ran) != len(eligible) {
 		t.Fatalf("imported %d agents, want all %d", len(ran), len(eligible))
 	}
+	// The resolved anchor has to REACH the importer. Every other seam stub
+	// discards it, so without this a hand-off broken to "" passes the whole
+	// unit suite and is caught only by the integration tests.
+	if want := testutil.GetHeadHash(t, dir); anchor != want {
+		t.Errorf("importer received anchor %q, want the resolved head %q", anchor, want)
+	}
 }
 
 // TestMaybeOfferSessionImport_YesDoesNotImport pins the decision that --yes
@@ -154,9 +162,7 @@ func TestMaybeOfferSessionImport_ImportHistoryImportsAllWithoutPrompting(t *test
 // decision rather than a setup default.
 func TestMaybeOfferSessionImport_YesDoesNotImport(t *testing.T) {
 	// Not parallel: overrides seams, chdirs into a temp repo, and sets env.
-	dir := t.TempDir()
-	testutil.InitRepo(t, dir)
-	t.Chdir(dir)
+	importTestRepo(t)
 	// A real TTY is available: --yes must still not import, and must not fall
 	// through to the prompt either.
 	t.Setenv("ENTIRE_TEST_TTY", "1")
@@ -211,9 +217,7 @@ func TestMaybeOfferSessionImport_ImportHistoryOnNonFirstRunIsReported(t *testing
 
 func TestMaybeOfferSessionImport_NonInteractiveWithoutOptInSkips(t *testing.T) {
 	// Not parallel: overrides seams and chdirs into a temp repo.
-	dir := t.TempDir()
-	testutil.InitRepo(t, dir)
-	t.Chdir(dir)
+	importTestRepo(t)
 	// No ENTIRE_TEST_TTY => CanPromptInteractively() is false (non-interactive),
 	// e.g. a scripted or agent-driven enable.
 
@@ -288,9 +292,7 @@ func TestMaybeOfferSessionImport_InteractiveUsesSelection(t *testing.T) {
 }
 
 func TestMaybeOfferSessionImport_EmptySelectionSkips(t *testing.T) {
-	dir := t.TempDir()
-	testutil.InitRepo(t, dir)
-	t.Chdir(dir)
+	importTestRepo(t)
 	t.Setenv("ENTIRE_TEST_TTY", "1")
 
 	runCalled := false
@@ -337,9 +339,7 @@ func TestRunSelectedImports_UnsatisfiablePolicySkips(t *testing.T) {
 }
 
 func TestMaybeOfferSessionImport_PromptErrorIsBestEffort(t *testing.T) {
-	dir := t.TempDir()
-	testutil.InitRepo(t, dir)
-	t.Chdir(dir)
+	importTestRepo(t)
 	t.Setenv("ENTIRE_TEST_TTY", "1")
 
 	runCalled := false
