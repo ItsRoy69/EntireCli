@@ -320,14 +320,16 @@ func resolveRepoPathRef(ctx context.Context, c repoRefClient, ref, projectRef st
 // A ref that never named the et/ token is answered with the accepted shape and
 // nothing else, before the parser runs: its "not a native ref" reason is the
 // cue to try another grammar, not a message for the user. A ref that named the
-// token and got the rest wrong keeps the parser's reason, which says which part.
+// token and got the rest wrong keeps the parser's reason, which already carries
+// the shape or the offending name; only the ref is put in front of it, as
+// resolveRepoPathRef does.
 func resolveRepoPath(ctx context.Context, c repoRefClient, ref string) (string, error) {
 	if !declaresForge(ref, nativeCloneForge) {
 		return "", fmt.Errorf("repo %q must be a /%s/<project>/<repo> path", ref, nativeCloneForge)
 	}
 	project, repoName, err := parseNativeCloneRef(ref)
 	if err != nil {
-		return "", fmt.Errorf("repo %q must be a /%s/<project>/<repo> path: %w", ref, nativeCloneForge, err)
+		return "", fmt.Errorf("invalid repo ref %q: %w", ref, err)
 	}
 	projID, err := resolveProjectByName(ctx, c, project)
 	if err != nil {

@@ -500,7 +500,8 @@ func TestResolveRepoPath(t *testing.T) {
 	t.Run("a malformed native path keeps the parser's reason", func(t *testing.T) {
 		t.Parallel()
 		// The ref named et/ and got the rest wrong, so the parser knows which
-		// part: that reason is specific to what was typed and stays.
+		// part: that reason already carries the shape or the offending name,
+		// and only the ref itself is added in front of it.
 		for ref, reason := range map[string]string{
 			"/et/widgets":       "2 names after the et token, got 1",
 			"/et/widgets/-bad-": `repo "-bad-" is not a name the server accepts`,
@@ -511,8 +512,9 @@ func TestResolveRepoPath(t *testing.T) {
 					w.WriteHeader(http.StatusInternalServerError)
 				})
 				_, err := resolveRepoPath(context.Background(), c, ref)
-				require.ErrorContains(t, err, "must be a /et/<project>/<repo> path: ")
+				require.ErrorContains(t, err, "invalid repo ref "+strconv.Quote(ref)+": ")
 				require.ErrorContains(t, err, reason)
+				require.NotContains(t, err.Error(), "must be a")
 				require.Zero(t, calls.Load())
 			})
 		}
