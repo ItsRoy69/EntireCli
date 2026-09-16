@@ -374,20 +374,20 @@ func isSSHSession() bool {
 
 // noLocalDisplay reports whether this machine cannot show a browser: a Linux
 // or BSD session with neither an X11 nor a Wayland display. WSL is excluded
-// (xdg-open there reaches the Windows browser through interop; GitHub issue
-// #1707 tracks the WSL browser case), and so is an explicit $BROWSER, which
-// names an opener the user vouches for. macOS and Windows always have a
-// display.
+// because a browser is reachable there — the Windows one through interop, or
+// a Linux one; GitHub issue #1707 is about which of those xdg-open picks, not
+// about whether one exists. An explicit $BROWSER is excluded too: it names an
+// opener the user vouches for. macOS and Windows always have a display.
 //
 // This catches the remote terminals isSSHSession cannot: web terminals and
 // agent orchestrators that give the user a shell on a server without SSH
 // variables. There the loopback listener binds on the server, and the browser
-// the user opens on their own machine is redirected to a 127.0.0.1 that is not
-// the server — the "login redirects me to 127" report.
+// the user opens on their own machine is redirected to a 127.0.0.1 that means
+// the server, not the machine the browser is on (the September 2026 support
+// report).
 //
-// The platform list is the same set tokenstore.secretServicePlatforms owns.
-// It is spelled again here because the concern differs (a display, not a
-// keyring daemon) and that set is unexported.
+// The platform list is Linux and the BSDs: the systems where a graphical
+// session is optional and its absence is visible in the environment.
 func noLocalDisplay(goos string, getenv func(string) string) bool {
 	switch goos {
 	case "linux", "freebsd", "openbsd", "netbsd", "dragonfly":
