@@ -54,8 +54,7 @@ With Entire, you can:
 Install with Homebrew:
 
 ```bash
-brew install --cask entireio/tap/entire            # stable
-# brew install --cask entireio/tap/entire@nightly  # or nightly
+brew install --cask entireio/tap/entire
 ```
 
 Use the fully-qualified cask name (`entireio/tap/entire`, not `entire`). Homebrew 6 requires third-party taps to be trusted before it will evaluate them, and a fully-qualified name taps and trusts just that one cask, so no separate `brew tap` / `brew trust` step is needed. Requires Homebrew 6.0.10 or newer.
