@@ -205,10 +205,11 @@ func revokeGrant(cmd *cobra.Command, subject string, revoke func() error) error 
 // server resolved (a provider:handle, or an org name), falling back to the
 // ULID. Org membership is flat, so it carries the membership STATUS instead
 // of provenance; project and repo grants include owner and inherited rows,
-// so they add SOURCE and TYPE, and keep the ULID in ID for revoke.
+// so they add SOURCE and TYPE. No table prints an internal id: the grantee
+// ULID is in the --json output for anyone who needs it.
 var (
 	orgMemberColumns = []string{"GRANTEE", colHeaderRole, colHeaderStatus}
-	grantColumns     = []string{"GRANTEE", colHeaderRole, "SOURCE", "TYPE", "ID"}
+	grantColumns     = []string{"GRANTEE", colHeaderRole, "SOURCE", "TYPE"}
 )
 
 func orgMemberRow(m coreapi.Membership) []string {
@@ -216,13 +217,13 @@ func orgMemberRow(m coreapi.Membership) []string {
 }
 
 func projectGrantRow(g coreapi.ProjectGrant) []string {
-	return []string{granteeName(g.GranteeName, g.GranteeId), g.Role, g.Source, g.GranteeType, g.GranteeId}
+	return []string{granteeName(g.GranteeName, g.GranteeId), g.Role, g.Source, g.GranteeType}
 }
 
 // repoGrantRow mirrors projectGrantRow; RepoGrant and ProjectGrant share the
 // grantee/role/source shape, so both reuse grantColumns.
 func repoGrantRow(g coreapi.RepoGrant) []string {
-	return []string{granteeName(g.GranteeName, g.GranteeId), g.Role, g.Source, g.GranteeType, g.GranteeId}
+	return []string{granteeName(g.GranteeName, g.GranteeId), g.Role, g.Source, g.GranteeType}
 }
 
 // granteeName returns the friendly name when the server resolved one, falling

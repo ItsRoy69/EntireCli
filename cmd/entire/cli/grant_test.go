@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"slices"
 	"strconv"
 	"testing"
 
@@ -66,10 +65,9 @@ func TestGrantRows(t *testing.T) {
 	const ulid = "01HZX0000000000000000000AB"
 
 	// grantColumns and the row builders must stay in lockstep — same width,
-	// same column order — or the table header and cells misalign.
-	if got, want := len(grantColumns), 5; got != want {
-		t.Fatalf("grantColumns has %d columns, want %d", got, want)
-	}
+	// same column order — or the table header and cells misalign. No column
+	// carries an internal id: the grantee ULID stays in --json only.
+	require.Equal(t, []string{"GRANTEE", "ROLE", "SOURCE", "TYPE"}, grantColumns)
 
 	t.Run("project resolved name", func(t *testing.T) {
 		t.Parallel()
@@ -80,10 +78,7 @@ func TestGrantRows(t *testing.T) {
 			Role:        "writer",
 			Source:      "direct",
 		})
-		want := []string{"github:alice", "writer", "direct", "account", ulid}
-		if !slices.Equal(row, want) {
-			t.Errorf("projectGrantRow = %v, want %v", row, want)
-		}
+		require.Equal(t, []string{"github:alice", "writer", "direct", "account"}, row)
 	})
 
 	// Org membership is the same table shape at the front: the grantee's
@@ -110,9 +105,6 @@ func TestGrantRows(t *testing.T) {
 			Role:        "reader",
 			Source:      "inherited",
 		})
-		want := []string{ulid, "reader", "inherited", "team", ulid}
-		if !slices.Equal(row, want) {
-			t.Errorf("repoGrantRow = %v, want %v", row, want)
-		}
+		require.Equal(t, []string{ulid, "reader", "inherited", "team"}, row)
 	})
 }
