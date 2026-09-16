@@ -221,3 +221,30 @@ func TestGrantAdd_EmptyRoleIsRefusedLocally(t *testing.T) {
 		})
 	}
 }
+
+// TestGrantAdd_OmittedRequiredRoleIsRefusedLocally pins the other half of the
+// role contract: where --role is required (project and repo), leaving it out
+// fails cobra's required-flag check before RunE runs, so the empty role never
+// reaches validation, a lookup, or the API. That check is what lets the RunE
+// validate only a role the user typed.
+//
+// Not parallel: runCoreCmd swaps the package-level activeCoreClient seam.
+func TestGrantAdd_OmittedRequiredRoleIsRefusedLocally(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+	}))
+	t.Cleanup(srv.Close)
+
+	for name, tc := range map[string]struct {
+		newCmd func() *cobra.Command
+		target string
+	}{
+		"project": {newProjectGrantCmd, wiringProjULID},
+		"repo":    {newRepoGrantCmd, wiringRepoPath},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, _, err := runCoreCmd(t, tc.newCmd, srv.URL, "add", tc.target, "github:alice")
+			require.ErrorContains(t, err, `required flag(s) "role" not set`)
+		})
+	}
+}
