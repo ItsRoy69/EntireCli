@@ -1368,3 +1368,38 @@ func TestFormatGitPushError_NoOutputIsUnchanged(t *testing.T) {
 	assert.Equal(t, err, formatGitPushError(context.Background(), err, []byte("  \n"), "origin"))
 	assert.NoError(t, formatGitPushError(context.Background(), nil, []byte("x"), "origin"))
 }
+
+// PushWithOptions is where the reason was being dropped — the rejection lives in
+// the combined output, and folding it in is a single line at that call site.
+// Drive a real refused push so that line is covered too, not just
+// formatGitPushError in isolation.
+func TestPushWithOptions_ErrorCarriesRemoteRejectionReason(t *testing.T) {
+	t.Parallel()
+
+	const reason = "push declined due to repository rule violations"
+	const ref = "refs/entire/checkpoints/W1/X"
+
+	tmpDir := t.TempDir()
+	bareDir := filepath.Join(tmpDir, "bare.git")
+	workDir := filepath.Join(tmpDir, "work")
+
+	runIsolatedGit(t, "", "init", "--bare", bareDir)
+	hook := filepath.Join(bareDir, "hooks", "pre-receive")
+	require.NoError(t, os.WriteFile(hook, []byte("#!/bin/sh\necho '"+reason+"' >&2\nexit 1\n"), 0o755))
+
+	testutil.InitRepo(t, workDir)
+	testutil.WriteFile(t, workDir, "f.txt", "seed")
+	testutil.GitAdd(t, workDir, "f.txt")
+	testutil.GitCommit(t, workDir, "seed")
+	runIsolatedGit(t, workDir, "update-ref", ref, "HEAD")
+
+	_, err := PushWithOptions(context.Background(), PushOptions{
+		Remote:   bareDir,
+		RefSpecs: []string{ref + ":" + ref},
+		Dir:      workDir,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), reason,
+		"the remote's reason must reach the caller, not just \"exit status 1\"")
+	assert.Contains(t, err.Error(), "remote rejected")
+}
