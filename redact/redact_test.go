@@ -360,6 +360,7 @@ func TestString_PatternDetection(t *testing.T) {
 // and keeps secret scanners (including GitHub push protection) from flagging
 // synthetic test fixtures; the assembled runtime values exercise the redactor
 // exactly as a real token would.
+
 // awsKeyFixture is an AWS-Access-Key-ID-shaped value, assembled for the same
 // reason as the prefixes above and openSSHPrivateKeyMarker. It matters more
 // here than for those: GitHub push protection rejects this pattern outright,
