@@ -192,11 +192,13 @@ func TestRepoGrant_TakesOnlyTheNativePath(t *testing.T) {
 	})
 }
 
-// TestGrantAdd_EmptyRoleIsRefusedLocally pins that an explicit empty --role on
-// a target whose role is required is an invalid role, not a request: cobra's
-// required-flag check only asks whether the flag was given, so `--role=` passes
-// it with an empty value, and the empty string must then fail role validation
-// before any lookup or grant call is made.
+// TestGrantAdd_EmptyRoleIsRefusedLocally pins that an explicit empty --role is
+// an invalid role on every target, not a request: cobra's required-flag check
+// only asks whether the flag was given, so `--role=` passes it with an empty
+// value on project and repo, and on org (where --role is optional and omitting
+// it means the server default) an explicit empty value is still a value the
+// user typed. All three must fail role validation before any lookup or grant
+// call is made.
 //
 // Not parallel: runCoreCmd swaps the package-level activeCoreClient seam.
 func TestGrantAdd_EmptyRoleIsRefusedLocally(t *testing.T) {
@@ -209,6 +211,7 @@ func TestGrantAdd_EmptyRoleIsRefusedLocally(t *testing.T) {
 		newCmd func() *cobra.Command
 		target string
 	}{
+		"org":     {newOrgGrantCmd, wiringOrgULID},
 		"project": {newProjectGrantCmd, wiringProjULID},
 		"repo":    {newRepoGrantCmd, wiringRepoPath},
 	} {
