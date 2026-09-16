@@ -201,16 +201,18 @@ func revokeGrant(cmd *cobra.Command, subject string, revoke func() error) error 
 }
 
 // orgMemberColumns / grantColumns are the human table views of the
-// membership/grant listings. Grant listings include inherited and owner grants,
-// so GRANTEE shows a friendly name (handle/org name) with SOURCE saying where
-// the grant comes from; ID keeps the ULID for revoke.
+// membership/grant listings. Both lead with GRANTEE, the friendly name the
+// server resolved (a provider:handle, or an org name), falling back to the
+// ULID. Org membership is flat, so it carries the membership STATUS instead
+// of provenance; project and repo grants include owner and inherited rows,
+// so they add SOURCE and TYPE, and keep the ULID in ID for revoke.
 var (
-	orgMemberColumns = []string{"ACCOUNT", colHeaderRole, colHeaderStatus}
+	orgMemberColumns = []string{"GRANTEE", colHeaderRole, colHeaderStatus}
 	grantColumns     = []string{"GRANTEE", colHeaderRole, "SOURCE", "TYPE", "ID"}
 )
 
 func orgMemberRow(m coreapi.Membership) []string {
-	return []string{m.AccountId, m.Role, m.Status}
+	return []string{granteeName(m.Handle, m.AccountId), m.Role, m.Status}
 }
 
 func projectGrantRow(g coreapi.ProjectGrant) []string {

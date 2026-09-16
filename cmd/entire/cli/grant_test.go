@@ -86,6 +86,21 @@ func TestGrantRows(t *testing.T) {
 		}
 	})
 
+	// Org membership is the same table shape at the front: the grantee's
+	// handle first, the account ULID only when the server sent no handle.
+	t.Run("org member shows the handle", func(t *testing.T) {
+		t.Parallel()
+		require.Equal(t, []string{"GRANTEE", "ROLE", "STATUS"}, orgMemberColumns)
+		row := orgMemberRow(coreapi.Membership{AccountId: ulid, Handle: coreapi.NewOptString("github:alice"), Role: "owner", Status: "active"})
+		require.Equal(t, []string{"github:alice", "owner", "active"}, row)
+	})
+
+	t.Run("org member without a handle falls back to the ULID", func(t *testing.T) {
+		t.Parallel()
+		row := orgMemberRow(coreapi.Membership{AccountId: ulid, Role: "member", Status: "pending"})
+		require.Equal(t, []string{ulid, "member", "pending"}, row)
+	})
+
 	t.Run("repo unresolved name falls back to ULID", func(t *testing.T) {
 		t.Parallel()
 		row := repoGrantRow(coreapi.RepoGrant{
