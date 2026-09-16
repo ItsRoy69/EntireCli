@@ -23,10 +23,17 @@ func TestValidateRole(t *testing.T) {
 	}
 }
 
-// TestGrantTargetRoles pins each target's role set and default against the
-// server's enums: org membership has owner/admin/member with member as the
-// server default, while project and repo access has reader/writer/admin and no
-// default, so --role is required there.
+// TestGrantTargetRoles pins each target's role set and default: org
+// membership has owner/admin/member with member as the server default, while
+// project and repo access has reader/writer/admin and no default, so --role is
+// required there.
+//
+// Each list is also checked against the generated client's enum for that
+// target's grant body. The lists are bare strings cast into those enum types,
+// so nothing else notices when a regenerated client renames, drops or adds a
+// role: the help would advertise a role the server refuses, or refuse one it
+// accepts. The deleted per-target switch used to catch that at compile time;
+// this is the same guard as a test.
 func TestGrantTargetRoles(t *testing.T) {
 	t.Parallel()
 	require.Equal(t, []string{"owner", "admin", "member"}, orgGrantTarget.roles)
@@ -35,6 +42,20 @@ func TestGrantTargetRoles(t *testing.T) {
 	require.Empty(t, projectGrantTarget.defaultRole)
 	require.Equal(t, []string{"reader", "writer", "admin"}, repoGrantTarget.roles)
 	require.Empty(t, repoGrantTarget.defaultRole)
+
+	require.Equal(t, enumStrings(coreapi.AddOrgMemberInputBodyRole("").AllValues()), orgGrantTarget.roles)
+	require.Equal(t, enumStrings(coreapi.GrantProjectAccessInputBodyRole("").AllValues()), projectGrantTarget.roles)
+	require.Equal(t, enumStrings(coreapi.GrantRepoAccessInputBodyRole("").AllValues()), repoGrantTarget.roles)
+}
+
+// enumStrings converts a generated enum's AllValues() into the plain strings a
+// grantTarget lists.
+func enumStrings[E ~string](values []E) []string {
+	out := make([]string, len(values))
+	for i, v := range values {
+		out[i] = string(v)
+	}
+	return out
 }
 
 func TestGranteeName(t *testing.T) {
