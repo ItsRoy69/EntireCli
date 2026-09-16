@@ -282,7 +282,7 @@ By default `entire login` opens a browser to sign in and stores tokens in the OS
 
 ### Interactive login on a headless machine
 
-Sign-in itself already handles this: with no interactive terminal, or over SSH, `entire login` switches to the device-code flow on its own and prints an approval URL you can open on any machine. `entire login --device` forces that flow explicitly. Only token *storage* needs an override — use the file-backed store:
+Sign-in itself already handles this: with no interactive terminal, over SSH, or on a Linux or BSD machine with no graphical display, `entire login` switches to the device-code flow on its own and prints an approval URL you can open on any machine. `entire login --device` forces that flow explicitly. Only token *storage* needs an override — use the file-backed store:
 
 ```bash
 ENTIRE_TOKEN_STORE=file entire login
