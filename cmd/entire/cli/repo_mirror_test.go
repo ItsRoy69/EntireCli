@@ -138,7 +138,7 @@ func TestRepoMirrorAdd_Flags(t *testing.T) {
 	add := newRepoMirrorAddCmd()
 	timeout := add.Flags().Lookup("timeout")
 	require.NotNil(t, timeout)
-	require.Equal(t, "How long to wait for mirror request submission, placement, and clone readiness", timeout.Usage)
+	require.Equal(t, "How long to wait for mirror request submission, placement, and clone readiness (0 waits indefinitely)", timeout.Usage)
 	require.NotNil(t, add.Flags().Lookup("cluster"))
 	require.ErrorContains(t, add.Args(add, []string{"github.com/o/r", "aws-us-east-2.entire.io"}), "accepts at most 1 arg")
 }

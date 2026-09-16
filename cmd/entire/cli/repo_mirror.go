@@ -462,6 +462,13 @@ func newRepoMirrorAddCmd() *cobra.Command {
 			"  entire repo mirror add /gh/octocat/hello-world\n" +
 			"  entire repo mirror add /gh/octocat/hello-world --cluster aws-us-east-2.entire.io",
 		Args: cobra.MaximumNArgs(1),
+		PreRunE: func(_ *cobra.Command, _ []string) error {
+			// Preserve zero as an unbounded wait for existing callers.
+			if opts.timeout < 0 {
+				return errors.New("--timeout must be zero or positive")
+			}
+			return nil
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) == 0 {
 				if cmd.Flags().Changed("cluster") {
@@ -475,7 +482,7 @@ func newRepoMirrorAddCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&cluster, "cluster", "", "Cluster host to mirror onto (a terminal offers the available clusters when omitted; other runs use "+defaultClusterHost+")")
 	cmd.Flags().BoolVar(&opts.noWait, "no-wait", false, "Return once the placement is registered, without waiting for the initial clone")
-	cmd.Flags().DurationVar(&opts.timeout, "timeout", 30*time.Minute, "How long to wait for mirror request submission, placement, and clone readiness")
+	cmd.Flags().DurationVar(&opts.timeout, "timeout", 30*time.Minute, "How long to wait for mirror request submission, placement, and clone readiness (0 waits indefinitely)")
 	return cmd
 }
 
@@ -554,6 +561,7 @@ func createAndAwaitMirror(ctx context.Context, c *coreapi.Client, owner, repo, c
 	}
 
 	waitCtx := ctx
+	// Zero preserves the caller context without adding a timeout.
 	if opts.timeout > 0 {
 		var cancel context.CancelFunc
 		waitCtx, cancel = context.WithTimeout(ctx, opts.timeout)
