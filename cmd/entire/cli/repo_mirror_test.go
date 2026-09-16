@@ -143,8 +143,8 @@ func TestRepoMirrorAdd_Flags(t *testing.T) {
 	require.ErrorContains(t, add.Args(add, []string{"github.com/o/r", "aws-us-east-2.entire.io"}), "accepts at most 1 arg")
 }
 
-// TestReportOneShotMirror exercises the one-shot create's presentation across
-// the shared lifecycle outcomes driven by mirrorCreateOutcome.
+// TestReportOneShotMirror exercises the one-shot add's presentation across
+// the shared lifecycle outcomes driven by mirrorAddOutcome.
 func TestReportOneShotMirror(t *testing.T) {
 	t.Parallel()
 	const id = "01KS6KFJR2XS6PZ188MVYE07AN"
@@ -157,7 +157,7 @@ func TestReportOneShotMirror(t *testing.T) {
 		t.Parallel()
 		var out, errW bytes.Buffer
 		wantErr := errors.New("boom")
-		err := reportOneShotMirror(&out, &errW, mirrorCreateOutcome{}, wantErr)
+		err := reportOneShotMirror(&out, &errW, mirrorAddOutcome{}, wantErr)
 		require.ErrorIs(t, err, wantErr)
 		require.Empty(t, out.String())
 	})
@@ -165,7 +165,7 @@ func TestReportOneShotMirror(t *testing.T) {
 	t.Run("no-wait prints in-progress hint", func(t *testing.T) {
 		t.Parallel()
 		var out, errW bytes.Buffer
-		err := reportOneShotMirror(&out, &errW, mirrorCreateOutcome{created: mk()}, nil)
+		err := reportOneShotMirror(&out, &errW, mirrorAddOutcome{created: mk()}, nil)
 		require.NoError(t, err)
 		require.Contains(t, out.String(), "Mirror placed at "+mirrorURL)
 		require.Contains(t, out.String(), "Mirror ID: "+id)
@@ -175,7 +175,7 @@ func TestReportOneShotMirror(t *testing.T) {
 	t.Run("ready prints clone hint", func(t *testing.T) {
 		t.Parallel()
 		var out, errW bytes.Buffer
-		outcome := mirrorCreateOutcome{created: mk(), status: coreapi.MirrorStatusReady, polled: true}
+		outcome := mirrorAddOutcome{created: mk(), status: coreapi.MirrorStatusReady, polled: true}
 		err := reportOneShotMirror(&out, &errW, outcome, nil)
 		require.NoError(t, err)
 		require.Contains(t, out.String(), "git clone "+mirrorURL)
@@ -184,7 +184,7 @@ func TestReportOneShotMirror(t *testing.T) {
 	t.Run("suspended surfaces support guidance as SilentError", func(t *testing.T) {
 		t.Parallel()
 		var out, errW bytes.Buffer
-		outcome := mirrorCreateOutcome{created: mk(), status: coreapi.MirrorStatusSuspended, polled: true}
+		outcome := mirrorAddOutcome{created: mk(), status: coreapi.MirrorStatusSuspended, polled: true}
 		err := reportOneShotMirror(&out, &errW, outcome, errMirrorSuspended)
 		var silent *SilentError
 		require.ErrorAs(t, err, &silent)
@@ -196,7 +196,7 @@ func TestReportOneShotMirror(t *testing.T) {
 	t.Run("failed returns an error naming the mirror", func(t *testing.T) {
 		t.Parallel()
 		var out, errW bytes.Buffer
-		outcome := mirrorCreateOutcome{created: mk(), status: coreapi.MirrorStatusFailed, polled: true}
+		outcome := mirrorAddOutcome{created: mk(), status: coreapi.MirrorStatusFailed, polled: true}
 		err := reportOneShotMirror(&out, &errW, outcome, errMirrorCloneFailed)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), id)
@@ -206,7 +206,7 @@ func TestReportOneShotMirror(t *testing.T) {
 		t.Parallel()
 		var out, errW bytes.Buffer
 		wantErr := errors.New("timed out waiting for initial clone")
-		outcome := mirrorCreateOutcome{created: mk(), status: coreapi.MirrorStatusProcessing, polled: true}
+		outcome := mirrorAddOutcome{created: mk(), status: coreapi.MirrorStatusProcessing, polled: true}
 		err := reportOneShotMirror(&out, &errW, outcome, wantErr)
 		require.ErrorIs(t, err, wantErr)
 	})
@@ -1702,7 +1702,7 @@ func TestValidateClusterHost(t *testing.T) {
 // TestRemoveMirror covers `repo mirror remove`'s DeleteMirror call:
 // removeMirror dials via runCoreForCluster, which the activeCoreClient test
 // seam does not intercept, so this drives the helper directly against an
-// httptest server the way the createAndAwaitMirror tests do.
+// httptest server the way the addAndAwaitMirror tests do.
 func TestRemoveMirror(t *testing.T) {
 	t.Parallel()
 

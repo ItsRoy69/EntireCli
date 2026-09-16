@@ -680,7 +680,7 @@ func runCoreClient(cmd *cobra.Command, newClient func(context.Context) (*coreapi
 		// Commands that already reported a partial success own the rendering.
 		// renderCoreError extracts API problems through wrappers, discarding
 		// SilentError and causing main to print again. Guard here rather than
-		// changing that display helper: the mirror-create wizard needs its
+		// changing that display helper: the mirror-add wizard needs its
 		// plain message before it prints.
 		var silent *SilentError
 		if errors.As(err, &silent) {
@@ -722,7 +722,7 @@ func renderCoreError(err error) error {
 	// generated security scaffolding. Redundant for the commands that return
 	// this error to main.go (which cleans it again — harmless, since the strip
 	// leaves the original chain intact to unwrap), and load-bearing for the
-	// mirror-create wizard, which prints renderCoreError's result itself and
+	// mirror-add wizard, which prints renderCoreError's result itself and
 	// returns a SilentError, so main.go never renders it.
 	return RenderUserFacingError(err)
 }

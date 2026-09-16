@@ -719,9 +719,12 @@ func TestRepoList_GroupedFlagHelp(t *testing.T) {
 	require.NoError(t, err)
 	// Anchor past the Long text (which mentions flags by name) so the order
 	// assertions see only the flag sections.
-	idx := strings.Index(stdout, "Navigation Flags:")
-	require.GreaterOrEqual(t, idx, 0, "expected a Navigation Flags section")
+	idx := strings.Index(stdout, "Scope Flags:")
+	require.GreaterOrEqual(t, idx, 0, "expected a Scope Flags section")
+	// --project is what the command cannot run without, so it leads; ungrouped
+	// flags render last, which is why it carries a group at all.
 	requireOrder(t, stdout[idx:],
+		"Scope Flags:", "--project",
 		"Navigation Flags:", "--all", "--limit", "--page-size", "--page-token",
 		"Formatting Flags:", "--json", "--no-pager",
 	)

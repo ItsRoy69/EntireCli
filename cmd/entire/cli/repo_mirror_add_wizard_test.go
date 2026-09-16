@@ -40,7 +40,7 @@ func TestCreateOneMirror_Suspended(t *testing.T) {
 	var final string
 	var finalOK bool
 	target := mirrorTarget{owner: "o", repo: "r", region: regionChoice{host: "c"}}
-	res := createOneMirror(ctx, target, c, nil, mirrorCreateOptions{timeout: time.Second},
+	res := createOneMirror(ctx, target, c, nil, mirrorAddOptions{timeout: time.Second},
 		func(status string, isFinal, ok bool) {
 			if isFinal {
 				final, finalOK = status, ok
@@ -90,7 +90,7 @@ func TestCreateOneMirror_PollErrorRendersCleanDetail(t *testing.T) {
 	require.NoError(t, err)
 
 	target := mirrorTarget{owner: "o", repo: "r", region: regionChoice{host: "c"}}
-	res := createOneMirror(ctx, target, c, nil, mirrorCreateOptions{timeout: time.Second}, nil)
+	res := createOneMirror(ctx, target, c, nil, mirrorAddOptions{timeout: time.Second}, nil)
 
 	require.Equal(t, mirrorStatusError, res.status)
 	require.Equal(t, "entire://cluster/gh/owner/repo", res.cloneURL, "a successful placement still yields the clone URL")
@@ -130,7 +130,7 @@ func TestRunMirrorCreateWizard_RequiresTTY(t *testing.T) {
 	cmd.SetErr(&errOut)
 	cmd.SetContext(context.Background())
 
-	err := runMirrorCreateWizard(cmd, mirrorCreateOptions{timeout: time.Minute})
+	err := runMirrorAddWizard(cmd, mirrorAddOptions{timeout: time.Minute})
 
 	var silent *SilentError
 	require.ErrorAs(t, err, &silent)

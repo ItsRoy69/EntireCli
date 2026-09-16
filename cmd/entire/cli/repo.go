@@ -136,7 +136,7 @@ and recovery instructions go to stderr.`,
 			"  entire repo create web --project acme --wait-timeout=5m",
 		PreRunE: func(_ *cobra.Command, _ []string) error {
 			// Invalid flag values are usage errors, including zero/negative
-			// durations; match mirror create and Cobra's malformed-value path.
+			// durations; match mirror add and Cobra's malformed-value path.
 			if waitTimeout <= 0 {
 				return errors.New("--wait-timeout must be positive")
 			}
@@ -317,9 +317,11 @@ func newRepoListCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&noPager, "no-pager", false, "Print directly to stdout instead of a pager for long output")
 	pageModeFlags(cmd, &pageSize, &pageToken)
 	addJSONFlag(cmd)
+	setFlagGroup(cmd, flagGroupScope, "project")
 	setFlagGroup(cmd, flagGroupNavigation, "all", "limit", "page-size", "page-token")
 	setFlagGroup(cmd, flagGroupFormatting, "json", "no-pager")
 	useGroupedFlagHelp(cmd,
+		flagGroup{name: flagGroupScope},
 		flagGroup{name: flagGroupNavigation},
 		flagGroup{name: flagGroupFormatting},
 	)
@@ -478,7 +480,22 @@ func newRepoEditCmd() *cobra.Command {
 		Example: "  entire repo edit /et/my-project/my-repo --visibility private",
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return setRepoVisibility(cmd, args[0], project, visibility)
+			vis, err := parseVisibility(visibility)
+			if err != nil {
+				cmd.SilenceUsage = true
+				return err
+			}
+			return runCoreObject(cmd, visibilityColumns, visibilityRow, func(ctx context.Context, c *coreapi.Client) (*repoVisibility, error) {
+				repoID, err := resolveRepoRef(ctx, c, args[0], project)
+				if err != nil {
+					return nil, err
+				}
+				out, err := c.SetRepoVisibility(ctx, &coreapi.SetRepoVisibilityInputBody{Visibility: vis}, coreapi.SetRepoVisibilityParams{RepoId: repoID})
+				if err != nil {
+					return nil, err
+				}
+				return &repoVisibility{Repo: args[0], Visibility: string(out.Visibility)}, nil
+			})
 		},
 	}
 	cmd.Flags().StringVar(&visibility, "visibility", "", "Visibility to set: public or private (required)")
@@ -486,27 +503,6 @@ func newRepoEditCmd() *cobra.Command {
 	bindRepoProjectFlag(cmd, &project)
 	addJSONFlag(cmd)
 	return cmd
-}
-
-// setRepoVisibility validates visibility client-side, then sends it for the
-// repo ref and prints the server's authoritative answer.
-func setRepoVisibility(cmd *cobra.Command, ref, project, visibility string) error {
-	vis, err := parseVisibility(visibility)
-	if err != nil {
-		cmd.SilenceUsage = true
-		return err
-	}
-	return runCoreObject(cmd, visibilityColumns, visibilityRow, func(ctx context.Context, c *coreapi.Client) (*repoVisibility, error) {
-		repoID, err := resolveRepoRef(ctx, c, ref, project)
-		if err != nil {
-			return nil, err
-		}
-		out, err := c.SetRepoVisibility(ctx, &coreapi.SetRepoVisibilityInputBody{Visibility: vis}, coreapi.SetRepoVisibilityParams{RepoId: repoID})
-		if err != nil {
-			return nil, err
-		}
-		return &repoVisibility{Repo: ref, Visibility: string(out.Visibility)}, nil
-	})
 }
 
 // bindRepoProjectFlag wires the shared --project scope used to resolve a repo

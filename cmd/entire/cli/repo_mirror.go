@@ -375,13 +375,15 @@ func filterByName[T any](items []T, nameOf func(T) string, substr string) []T {
 	return out
 }
 
-// defaultClusterHost is the cluster the positional-arg mirror commands target
-// when the caller omits the <cluster-host> argument. The no-arg create wizard
-// and the interactive one-shot `add <repo>` instead enumerate real
-// clusters from the catalog (GET /api/v1/clusters, see availableRegions and
-// resolveOneShotClusterHost in repo_mirror_create_wizard.go); this stays as
-// the fixed fallback for non-interactive invocations, so scripts keep a
-// stable, offline-resolvable default.
+// defaultClusterHost is the cluster a mirror command targets when --cluster is
+// omitted: `mirror remove` and `access list` default the flag to it outright,
+// and `mirror add` falls back to it when there is no terminal to offer a
+// picker on. The no-arg add wizard and the interactive one-shot `add <repo>`
+// instead enumerate real clusters from the catalog (GET /api/v1/clusters, see
+// availableRegions and resolveOneShotClusterHost in
+// repo_mirror_add_wizard.go); this stays as the fixed fallback for
+// non-interactive invocations, so scripts keep a stable, offline-resolvable
+// default.
 const defaultClusterHost = "aws-us-east-2.entire.io"
 
 // clusterHostLabelRe matches one DNS label: alphanumeric, internal hyphens
@@ -442,7 +444,7 @@ func newRepoMirrorCmd() *cobra.Command {
 
 func newRepoMirrorAddCmd() *cobra.Command {
 	var (
-		opts    mirrorCreateOptions
+		opts    mirrorAddOptions
 		cluster string
 	)
 	cmd := &cobra.Command{
@@ -475,7 +477,7 @@ func newRepoMirrorAddCmd() *cobra.Command {
 					cmd.SilenceUsage = true
 					return errors.New("--cluster requires <repo>; for example: entire repo mirror add /gh/owner/repo --cluster <host>")
 				}
-				return runMirrorCreateWizard(cmd, opts)
+				return runMirrorAddWizard(cmd, opts)
 			}
 			return runMirrorAdd(cmd, args[0], cluster, opts)
 		},
@@ -488,7 +490,7 @@ func newRepoMirrorAddCmd() *cobra.Command {
 
 // runMirrorAdd is the one-shot `repo mirror add <repo>` body: pick the
 // cluster when none was named, then create the mirror and wait per opts.
-func runMirrorAdd(cmd *cobra.Command, repoRef, clusterHost string, opts mirrorCreateOptions) error {
+func runMirrorAdd(cmd *cobra.Command, repoRef, clusterHost string, opts mirrorAddOptions) error {
 	owner, repo, err := parseGitHubMirrorRepoRef(repoRef)
 	if err != nil {
 		cmd.SilenceUsage = true
@@ -510,13 +512,13 @@ func runMirrorAdd(cmd *cobra.Command, repoRef, clusterHost string, opts mirrorCr
 	return runCoreForCluster(cmd, clusterHost, func(ctx context.Context, c *coreapi.Client) error {
 		errW := cmd.ErrOrStderr()
 		var finishPhase func(bool)
-		opts.onPhase = func(next mirrorCreatePhase) {
+		opts.onPhase = func(next mirrorAddPhase) {
 			if finishPhase != nil {
 				finishPhase(true)
 			}
 			finishPhase = startSpinner(errW, fmt.Sprintf("%s mirror %s/%s into %s", next.label(), owner, repo, clusterHost))
 		}
-		outcome, err := createAndAwaitMirror(ctx, c, owner, repo, clusterHost, opts)
+		outcome, err := addAndAwaitMirror(ctx, c, owner, repo, clusterHost, opts)
 		if finishPhase != nil {
 			finishPhase(err == nil)
 		}
@@ -524,35 +526,35 @@ func runMirrorAdd(cmd *cobra.Command, repoRef, clusterHost string, opts mirrorCr
 	})
 }
 
-// mirrorCreateOutcome bundles the create response with the clone status
+// mirrorAddOutcome bundles the create response with the clone status
 // observed while waiting. polled is false for --no-wait, where status is unset.
-type mirrorCreateOutcome struct {
+type mirrorAddOutcome struct {
 	created *coreapi.CreatedMirror
 	status  coreapi.MirrorStatus
 	polled  bool
 }
 
-type mirrorCreatePhase string
+type mirrorAddPhase string
 
 const (
-	mirrorCreatePhaseQueued  mirrorCreatePhase = "queued"
-	mirrorCreatePhasePlacing mirrorCreatePhase = "placing"
-	mirrorCreatePhaseCloning mirrorCreatePhase = "cloning"
+	mirrorAddPhaseQueued  mirrorAddPhase = "queued"
+	mirrorAddPhasePlacing mirrorAddPhase = "placing"
+	mirrorAddPhaseCloning mirrorAddPhase = "cloning"
 )
 
-func (p mirrorCreatePhase) label() string {
+func (p mirrorAddPhase) label() string {
 	return upperFirst(string(p))
 }
 
-type mirrorCreateOptions struct {
+type mirrorAddOptions struct {
 	noWait  bool
 	timeout time.Duration
-	onPhase func(mirrorCreatePhase)
+	onPhase func(mirrorAddPhase)
 }
 
-func createAndAwaitMirror(ctx context.Context, c *coreapi.Client, owner, repo, clusterHost string, opts mirrorCreateOptions) (mirrorCreateOutcome, error) {
-	var currentPhase mirrorCreatePhase
-	reportPhase := func(phase mirrorCreatePhase) {
+func addAndAwaitMirror(ctx context.Context, c *coreapi.Client, owner, repo, clusterHost string, opts mirrorAddOptions) (mirrorAddOutcome, error) {
+	var currentPhase mirrorAddPhase
+	reportPhase := func(phase mirrorAddPhase) {
 		if opts.onPhase == nil || phase == currentPhase {
 			return
 		}
@@ -568,7 +570,7 @@ func createAndAwaitMirror(ctx context.Context, c *coreapi.Client, owner, repo, c
 		defer cancel()
 	}
 
-	reportPhase(mirrorCreatePhaseQueued)
+	reportPhase(mirrorAddPhaseQueued)
 	accepted, err := c.CreateMirrorRequest(waitCtx, &coreapi.CreateMirrorRequestInputBody{
 		Provider:    coreapi.CreateMirrorRequestInputBodyProviderGithub,
 		Owner:       owner,
@@ -577,28 +579,28 @@ func createAndAwaitMirror(ctx context.Context, c *coreapi.Client, owner, repo, c
 	})
 	if err != nil {
 		if waitErr := waitCtx.Err(); waitErr != nil {
-			return mirrorCreateOutcome{}, classifyWaitContextErr(waitErr, "submitting mirror request")
+			return mirrorAddOutcome{}, classifyWaitContextErr(waitErr, "submitting mirror request")
 		}
-		return mirrorCreateOutcome{}, err
+		return mirrorAddOutcome{}, err
 	}
 	location, _ := accepted.Location.Get()
 	created, err := awaitMirrorPlacement(waitCtx, c, accepted.Response, location, func(status coreapi.MirrorRequestStatus) {
 		switch status {
 		case coreapi.MirrorRequestStatusPending:
-			reportPhase(mirrorCreatePhaseQueued)
+			reportPhase(mirrorAddPhaseQueued)
 		case coreapi.MirrorRequestStatusProcessing:
-			reportPhase(mirrorCreatePhasePlacing)
+			reportPhase(mirrorAddPhasePlacing)
 		case coreapi.MirrorRequestStatusSucceeded, coreapi.MirrorRequestStatusFailed:
 		}
 	})
 	if err != nil {
-		return mirrorCreateOutcome{}, err
+		return mirrorAddOutcome{}, err
 	}
-	outcome := mirrorCreateOutcome{created: created}
+	outcome := mirrorAddOutcome{created: created}
 	if opts.noWait {
 		return outcome, nil
 	}
-	reportPhase(mirrorCreatePhaseCloning)
+	reportPhase(mirrorAddPhaseCloning)
 	status, werr := awaitMirrorReady(waitCtx, c, created.MirrorId, 0)
 	outcome.status = status
 	outcome.polled = true
@@ -606,10 +608,10 @@ func createAndAwaitMirror(ctx context.Context, c *coreapi.Client, owner, repo, c
 }
 
 // reportOneShotMirror renders the human output for `repo mirror add
-// <repo>` from the shared createAndAwaitMirror result. A nil
+// <repo>` from the shared addAndAwaitMirror result. A nil
 // outcome.created means mirror placement failed — surface that error (nothing
 // was printed yet). Otherwise echo the placement, then the lifecycle outcome.
-func reportOneShotMirror(out, errW io.Writer, outcome mirrorCreateOutcome, err error) error {
+func reportOneShotMirror(out, errW io.Writer, outcome mirrorAddOutcome, err error) error {
 	created := outcome.created
 	if created == nil {
 		return err
