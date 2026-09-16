@@ -76,13 +76,13 @@ E2E tests:
 - Use the `//go:build e2e` build tag
 - Located in `e2e/tests/`
 - See [`e2e/README.md`](../../e2e/README.md) for full documentation (structure, debugging, adding agents)
-- Test real agent interactions (Claude Code, Gemini CLI, OpenCode, Cursor, Factory AI Droid, Copilot CLI, Pi, or Vogon creating files, committing, etc.)
+- Test agent interactions (creating files, committing, etc.); Vogon and Roger Roger are deterministic canaries rather than real-agent API calls.
 - Validate checkpoint scenarios documented in `docs/architecture/checkpoint-scenarios.md`
-- Support multiple agents via `E2E_AGENT` env var (`claude-code`, `gemini`, `opencode`, `cursor`, `factoryai-droid`, `copilot-cli`, `pi`, `vogon`)
+- Select a runner via `E2E_AGENT`: `claude-code`, `gemini-cli`, `opencode`, `codex`, `cursor-cli`, `factoryai-droid`, `copilot-cli`, `pi`, `vogon`, or `roger-roger`. These are the filter names used by registration in `e2e/agents/`, not necessarily the CLI's agent identifiers.
 
 **Environment variables:**
 
-- `E2E_AGENT` - Agent to test with (default: `claude-code`)
+- `E2E_AGENT` - Runner filter (unset/empty: all registered agents)
 - `E2E_CLAUDE_MODEL` - Claude model to use (default: `haiku` for cost efficiency)
 - `E2E_TIMEOUT` - Per-prompt timeout, overriding each runner's own default (e.g. `E2E_TIMEOUT=4m`)
 
@@ -106,7 +106,11 @@ func TestFeature_Bar(t *testing.T) {
 }
 ```
 
-**Exception:** Tests that modify process-global state cannot be parallelized. This includes `os.Chdir()`/`t.Chdir()` and `os.Setenv()`/`t.Setenv()` — Go's test framework will panic if these are used after `t.Parallel()`.
+**Exception:** Tests that modify process-global state must not run in parallel.
+`t.Chdir()` and `t.Setenv()` enforce this: they panic when the test or an ancestor
+is parallel, and prevent a later `t.Parallel()` call. Raw `os.Chdir()` and
+`os.Setenv()` do not enforce it; they still mutate process-global state and are
+unsafe in parallel tests. Prefer the `t.*` helpers for enforcement and cleanup.
 
 ### Git in Tests
 
@@ -202,8 +206,8 @@ A prompt that runs Bubble Tea on a separately opened terminal (plugin confirmati
 
 ### Source-Level Guard Tests
 
-Four tests scan this repo's own source with `git grep` to enforce an invariant
-the compiler cannot: `TestRootBasesAreTrusted` (root bases are trusted paths),
+Source-level guards scan this repo's own source with `git grep` to enforce
+invariants the compiler cannot. Examples include `TestRootBasesAreTrusted` (root bases are trusted paths),
 `TestTranscriptReadsOnlyShrink` (the unconfined transcript-read ratchet),
 `TestGitStatusCallSitesPassNoOptionalLocks`, and
 `TestAllHookConfigRelPaths_CoversEveryWorktreeConfigAgent`.
