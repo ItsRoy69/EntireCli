@@ -130,12 +130,17 @@ func TestAwaitMirrorReady(t *testing.T) {
 	})
 }
 
-func TestRepoMirrorCreate_WaitTimeoutHelp(t *testing.T) {
+// TestRepoMirrorAdd_Flags pins the one-shot flags: the wait bound is
+// --timeout and the cluster host is --cluster, not a positional.
+func TestRepoMirrorAdd_Flags(t *testing.T) {
 	t.Parallel()
 
-	flag := newRepoMirrorCreateCmd().Flags().Lookup("wait-timeout")
-	require.NotNil(t, flag)
-	require.Equal(t, "How long to wait for mirror request submission, placement, and clone readiness", flag.Usage)
+	add := newRepoMirrorAddCmd()
+	timeout := add.Flags().Lookup("timeout")
+	require.NotNil(t, timeout)
+	require.Equal(t, "How long to wait for mirror request submission, placement, and clone readiness", timeout.Usage)
+	require.NotNil(t, add.Flags().Lookup("cluster"))
+	require.ErrorContains(t, add.Args(add, []string{"github.com/o/r", "aws-us-east-2.entire.io"}), "accepts at most 1 arg")
 }
 
 // TestReportOneShotMirror exercises the one-shot create's presentation across
@@ -1599,18 +1604,8 @@ func TestBuildRepoDir(t *testing.T) {
 	})
 }
 
-func TestClusterArg(t *testing.T) {
-	t.Parallel()
-	if got := clusterArg([]string{"github.com/o/r", "eu-west-1.entire.io"}); got != "eu-west-1.entire.io" {
-		t.Errorf("explicit cluster = %q, want eu-west-1.entire.io", got)
-	}
-	if got := clusterArg([]string{"github.com/o/r"}); got != defaultClusterHost {
-		t.Errorf("omitted cluster = %q, want default %q", got, defaultClusterHost)
-	}
-}
-
 // TestResolveOneShotClusterHost_NonInteractive locks in that a non-interactive
-// `repo mirror create <github-url>` keeps the fixed defaultClusterHost without
+// `repo mirror add <github-url>` keeps the fixed defaultClusterHost without
 // dialing the control plane — scripts must get a stable, offline default. Under
 // `go test`, CanPromptInteractively() is false, so this exercises exactly the
 // script path; no server is running, so any catalog fetch would error.
@@ -1624,18 +1619,6 @@ func TestResolveOneShotClusterHost_NonInteractive(t *testing.T) {
 	}
 	if got != defaultClusterHost {
 		t.Errorf("resolveOneShotClusterHost() = %q, want default %q", got, defaultClusterHost)
-	}
-}
-
-func TestClusterArgAt(t *testing.T) {
-	t.Parallel()
-	// clusterArgAt reads the cluster from the optional positional at an
-	// arbitrary index — here index 2, after two leading positionals.
-	if got := clusterArgAt([]string{"github.com/o/r", "github:alice", "eu-west-1.entire.io"}, 2); got != "eu-west-1.entire.io" {
-		t.Errorf("explicit cluster = %q, want eu-west-1.entire.io", got)
-	}
-	if got := clusterArgAt([]string{"github.com/o/r", "github:alice"}, 2); got != defaultClusterHost {
-		t.Errorf("omitted cluster = %q, want default %q", got, defaultClusterHost)
 	}
 }
 
@@ -2042,4 +2025,113 @@ func TestRepoMirrorList_GroupedFlagHelp(t *testing.T) {
 		"Filtering & Sorting Flags:", "--access", "--available", "--cluster", "--mirrored", "--name", "--owner", "--private", "--sort", "--status",
 		"Formatting Flags:", "--json", "--no-pager",
 	)
+}
+
+// seamClusterCoreClient routes every cluster-addressed core call at client for
+// the test's duration and records the cluster host each call named.
+func seamClusterCoreClient(t *testing.T, client *coreapi.Client) *[]string {
+	t.Helper()
+	var hosts []string
+	prev := clusterCoreClient
+	clusterCoreClient = func(_ context.Context, host string) (*coreapi.Client, error) {
+		hosts = append(hosts, host)
+		return client, nil
+	}
+	t.Cleanup(func() { clusterCoreClient = prev })
+	return &hosts
+}
+
+// TestRepoMirrorRemove_ClusterFlag pins how `mirror remove` names its cluster:
+// --cluster picks it, omitting it means the default, and a second positional
+// is not an address.
+//
+// Not parallel: swaps the package-level clusterCoreClient seam.
+func TestRepoMirrorRemove_ClusterFlag(t *testing.T) {
+	var deleted []string
+	client := newMirrorRequestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete {
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+		deleted = append(deleted, r.URL.Query().Get("clusterHost"))
+		w.WriteHeader(http.StatusNoContent)
+	})
+	hosts := seamClusterCoreClient(t, client)
+	run := func(args ...string) (stdout string, err error) {
+		deleted, *hosts = nil, nil
+		cmd := newRepoMirrorRemoveCmd()
+		var out bytes.Buffer
+		cmd.SetOut(&out)
+		cmd.SetErr(&bytes.Buffer{})
+		cmd.SetArgs(args)
+		err = cmd.ExecuteContext(t.Context())
+		return out.String(), err
+	}
+
+	t.Run("--cluster names the cluster", func(t *testing.T) {
+		stdout, err := run("github.com/o/r", "--cluster", "eu.example")
+		require.NoError(t, err)
+		require.Contains(t, stdout, "Removed mirror github.com/o/r from eu.example")
+		require.Equal(t, []string{"eu.example"}, *hosts)
+		require.Equal(t, []string{"eu.example"}, deleted)
+	})
+
+	t.Run("omitted means the default cluster", func(t *testing.T) {
+		_, err := run("github.com/o/r")
+		require.NoError(t, err)
+		require.Equal(t, []string{defaultClusterHost}, deleted)
+	})
+
+	t.Run("a second positional is refused before any request", func(t *testing.T) {
+		_, err := run("github.com/o/r", "eu.example")
+		require.ErrorContains(t, err, "accepts 1 arg(s)")
+		require.Empty(t, deleted)
+	})
+}
+
+// TestRepoAccessList_ClusterFlag pins that `repo access list` names the
+// placement with --cluster, defaulting to the default cluster, and refuses a
+// second positional.
+//
+// Not parallel: swaps the package-level clusterCoreClient seam.
+func TestRepoAccessList_ClusterFlag(t *testing.T) {
+	var listed []string
+	client := newMirrorRequestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || !strings.HasSuffix(r.URL.Path, "/mirrors/collaborators") {
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+		listed = append(listed, r.URL.Query().Get("clusterHost"))
+		writeJSONResponse(t, w, http.StatusOK, &coreapi.ListMirrorCollaboratorsOutputBody{
+			Collaborators: []coreapi.MirrorCollaborator{{Handle: coreapi.NewOptString("alice"), Role: "reader", AccountId: "01ACCOUNT"}},
+		})
+	})
+	seamClusterCoreClient(t, client)
+	run := func(args ...string) (stdout string, err error) {
+		listed = nil
+		cmd := newRepoAccessListCmd()
+		var out bytes.Buffer
+		cmd.SetOut(&out)
+		cmd.SetErr(&bytes.Buffer{})
+		cmd.SetArgs(args)
+		err = cmd.ExecuteContext(t.Context())
+		return out.String(), err
+	}
+
+	t.Run("--cluster names the placement", func(t *testing.T) {
+		stdout, err := run("github.com/o/r", "--cluster", "eu.example")
+		require.NoError(t, err)
+		require.Contains(t, stdout, "alice")
+		require.Equal(t, []string{"eu.example"}, listed)
+	})
+
+	t.Run("omitted means the default cluster", func(t *testing.T) {
+		_, err := run("github.com/o/r")
+		require.NoError(t, err)
+		require.Equal(t, []string{defaultClusterHost}, listed)
+	})
+
+	t.Run("a second positional is refused before any request", func(t *testing.T) {
+		_, err := run("github.com/o/r", "eu.example")
+		require.ErrorContains(t, err, "accepts 1 arg(s)")
+		require.Empty(t, listed)
+	})
 }

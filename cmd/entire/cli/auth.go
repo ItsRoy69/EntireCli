@@ -111,7 +111,7 @@ func newAuthCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "auth",
 		Short: "Manage authentication",
-		Long:  "Authentication subcommands. Includes login, logout, status, and login-context management (contexts, use).",
+		Long:  "Authentication subcommands. Includes login, logout, status, and login-context management (contexts, switch).",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return cmd.Help()
 		},
@@ -122,7 +122,7 @@ func newAuthCmd() *cobra.Command {
 	cmd.AddCommand(newAuthStatusCmd())
 	cmd.AddCommand(newAuthTokenCmd())
 	cmd.AddCommand(newAuthContextsCmd())
-	cmd.AddCommand(newAuthUseCmd())
+	cmd.AddCommand(newAuthSwitchCmd())
 	return cmd
 }
 
@@ -321,7 +321,7 @@ func resolveEnvTokenStatusTarget(raw string) (statusTarget, error) {
 }
 
 // resolveStatusTarget picks the core + token for `entire auth status` (and
-// `logout`) from the active contexts.json context (so `auth use` retargets
+// `logout`) from the active contexts.json context (so `auth switch` retargets
 // status onto that login server). No active context means not logged in —
 // the zero-token target renders the `entire login` hint.
 //
@@ -487,7 +487,7 @@ func runAuthStatus(ctx context.Context, w io.Writer, fetchProfile profileFetcher
 
 	if t.totalContexts > 1 {
 		fmt.Fprintln(w)
-		fmt.Fprintf(w, "%d login contexts saved; run 'entire auth contexts' to list or 'entire auth use <name>' to switch.\n", t.totalContexts)
+		fmt.Fprintf(w, "%d login contexts saved; run 'entire auth contexts' to list or 'entire auth switch <name>' to switch.\n", t.totalContexts)
 	}
 	return nil
 }

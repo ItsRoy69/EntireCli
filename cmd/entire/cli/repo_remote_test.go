@@ -477,7 +477,7 @@ func TestReportMirrorRemotePlan(t *testing.T) {
 	})
 }
 
-func TestRepoMirrorUseCmd_FlagValidation(t *testing.T) {
+func TestRepoRemoteUseCmd_FlagValidation(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name string
@@ -486,18 +486,13 @@ func TestRepoMirrorUseCmd_FlagValidation(t *testing.T) {
 	}{
 		{name: "bad remote", args: []string{"--remote", "-f"}, want: "invalid --remote"},
 		{name: "bad upstream", args: []string{"--upstream", "bad name"}, want: "invalid --upstream"},
-		{name: "bad positional cluster host", args: []string{"github.com/a/b", "not a host"}, want: "invalid cluster host"},
 		{name: "bad cluster flag", args: []string{"--cluster", "not a host"}, want: "invalid cluster host"},
-		{
-			name: "positional and flag disagree",
-			args: []string{"github.com/a/b", "aws-us-east-2.entire.io", "--cluster", "aws-eu-central-1.entire.io"},
-			want: "disagree; pass only one",
-		},
+		{name: "a second positional is not a cluster host", args: []string{"github.com/a/b", "aws-us-east-2.entire.io"}, want: "accepts at most 1 arg"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			cmd := newRepoMirrorUseCmd()
+			cmd := newRepoRemoteUseCmd()
 			cmd.SetArgs(tt.args)
 			cmd.SetOut(&strings.Builder{})
 			cmd.SetErr(&strings.Builder{})
@@ -507,18 +502,18 @@ func TestRepoMirrorUseCmd_FlagValidation(t *testing.T) {
 	}
 }
 
-// The command must be reachable at `entire repo mirror use`, and must not have
+// The command must be reachable at `entire repo remote use`, and must not have
 // been registered as hidden.
-func TestRepoMirrorUseCmd_Registered(t *testing.T) {
+func TestRepoRemoteUseCmd_Registered(t *testing.T) {
 	t.Parallel()
 	var found bool
-	for _, c := range newRepoMirrorCmd().Commands() {
+	for _, c := range newRepoRemoteCmd().Commands() {
 		if c.Name() == "use" {
-			require.False(t, c.Hidden, "`repo mirror use` must be visible")
+			require.False(t, c.Hidden, "`repo remote use` must be visible")
 			found = true
 		}
 	}
-	require.True(t, found, "`use` must be registered under `repo mirror`")
+	require.True(t, found, "`use` must be registered under `repo remote`")
 }
 
 // huh answers an unreadable accessible prompt by writing the FIRST option's
@@ -536,7 +531,7 @@ func TestPromptMirrorRemoteChoice_FirstOptionMatchesNonInteractive(t *testing.T)
 	const forgeURL = "git@github.com:octocat/hello-world.git"
 	remotes := map[string]bool{"origin": true}
 
-	cmd := newRepoMirrorUseCmd()
+	cmd := newRepoRemoteUseCmd()
 	cmd.SetOut(&strings.Builder{})
 	cmd.SetErr(&strings.Builder{})
 	cmd.SetContext(t.Context())

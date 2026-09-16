@@ -31,7 +31,7 @@ import (
 // --json is deliberately NOT persistent here: it only makes sense on the read
 // and mutation verbs that render a wire payload, so it's registered per-command
 // with addJSONFlag. A persistent --json was inherited by side-effect verbs
-// (delete, clone, mirror create/remove, grant remove) that silently ignored it;
+// (delete, clone, mirror add/remove, grant remove) that silently ignored it;
 // cobra can't hide a persistent flag from a subset of children, so the flag
 // lives on exactly the commands that honor it.
 func addControlPlaneFlags(cmd *cobra.Command) {
@@ -581,7 +581,7 @@ func runCore(cmd *cobra.Command, fn func(ctx context.Context, c *coreapi.Client)
 }
 
 // runCoreForCluster is runCore for resource-provider commands addressed at a
-// specific cluster (mirror create/remove, mirror collaborators list):
+// specific cluster (mirror add/remove, access list):
 // it dials the core that fronts clusterHost — discovered from the cluster's
 // /.well-known/entire-cluster.json, authenticating with the matching local
 // context — instead of the active context. So the command works on a cluster in

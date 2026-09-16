@@ -102,10 +102,10 @@ func TestCreateAndAwaitMirror_AsyncSuccess(t *testing.T) {
 	})
 }
 
-func TestRepoMirrorCreate_BrokenEntireDirUsesDefaultRoute(t *testing.T) {
+func TestRepoMirrorAdd_BrokenEntireDirUsesDefaultRoute(t *testing.T) {
 	t.Run("symlink", func(t *testing.T) {
 		newRepoWithSymlinkedEntireDir(t)
-		assertMirrorCreateReachesArgumentValidation(t)
+		assertMirrorAddReachesArgumentValidation(t)
 	})
 
 	t.Run("regular file", func(t *testing.T) {
@@ -115,13 +115,13 @@ func TestRepoMirrorCreate_BrokenEntireDirUsesDefaultRoute(t *testing.T) {
 		t.Chdir(repoDir)
 		paths.ClearWorktreeRootCache()
 		t.Cleanup(paths.ClearWorktreeRootCache)
-		assertMirrorCreateReachesArgumentValidation(t)
+		assertMirrorAddReachesArgumentValidation(t)
 	})
 }
 
-func assertMirrorCreateReachesArgumentValidation(t *testing.T) {
+func assertMirrorAddReachesArgumentValidation(t *testing.T) {
 	t.Helper()
-	cmd := newRepoMirrorCreateCmd()
+	cmd := newRepoMirrorAddCmd()
 	cmd.SetArgs([]string{"not-a-github-url"})
 	require.ErrorContains(t, cmd.Execute(), "not a recognized GitHub URL")
 }
@@ -435,7 +435,7 @@ func TestCreateAndAwaitMirror_AsyncCancellation(t *testing.T) {
 	}
 }
 
-func TestRepoMirrorCreate_AsyncDefaultWhenSettingsFail(t *testing.T) {
+func TestRepoMirrorAdd_AsyncDefaultWhenSettingsFail(t *testing.T) {
 	useFastMirrorPolling(t)
 
 	setupTestRepo(t)
@@ -467,7 +467,7 @@ func TestRepoMirrorCreate_AsyncDefaultWhenSettingsFail(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	cmd.SetOut(&stdout)
 	cmd.SetErr(&stderr)
-	cmd.SetArgs([]string{"mirror", "create", "--no-wait", "github.com/owner/repo", "aws-us-east-2.entire.io"})
+	cmd.SetArgs([]string{"mirror", "add", "--no-wait", "--cluster", "aws-us-east-2.entire.io", "github.com/owner/repo"})
 	require.NoError(t, cmd.ExecuteContext(t.Context()))
 	require.Contains(t, stdout.String(), "Mirror placed at entire://cluster/gh/owner/repo")
 	require.Contains(t, stdout.String(), "Mirror ID: mirror-1")

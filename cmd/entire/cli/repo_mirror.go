@@ -377,28 +377,12 @@ func filterByName[T any](items []T, nameOf func(T) string, substr string) []T {
 
 // defaultClusterHost is the cluster the positional-arg mirror commands target
 // when the caller omits the <cluster-host> argument. The no-arg create wizard
-// and the interactive one-shot `create <github-url>` instead enumerate real
+// and the interactive one-shot `add <github-url>` instead enumerate real
 // clusters from the catalog (GET /api/v1/clusters, see availableRegions and
 // resolveOneShotClusterHost in repo_mirror_create_wizard.go); this stays as
 // the fixed fallback for non-interactive invocations, so scripts keep a
 // stable, offline-resolvable default.
 const defaultClusterHost = "aws-us-east-2.entire.io"
-
-// clusterArg returns the cluster host from the optional second positional
-// (after <github-url>), or defaultClusterHost when it was omitted.
-func clusterArg(args []string) string {
-	return clusterArgAt(args, 1)
-}
-
-// clusterArgAt returns the cluster host from the optional positional at idx,
-// or defaultClusterHost when it was omitted. Commands with leading positionals
-// (e.g. collaborators list <github-url> [cluster-host]) pass the trailing index.
-func clusterArgAt(args []string, idx int) string {
-	if len(args) > idx {
-		return args[idx]
-	}
-	return defaultClusterHost
-}
 
 // clusterHostLabelRe matches one DNS label: alphanumeric, internal hyphens
 // allowed, no leading/trailing hyphen.
@@ -441,94 +425,92 @@ func validateClusterHost(host string) error {
 }
 
 // newRepoMirrorCmd is the `entire repo mirror` subtree: manage EntireDB
-// GitHub-mirror placements on a cluster. Mirrors the standalone entiredb
-// CLI's `entire repo mirror` surface for the server-side half (create /
-// list / get / remove), plus the local-clone rewrite (`use`) — the one verb
-// here that touches no control-plane state beyond a placement lookup and
-// instead edits the current clone's git config (see repo_mirror_use.go).
+// GitHub-mirror placements on a cluster (add / list / get / remove). The
+// local-clone rewrite lives at `repo remote use` (repo_remote.go) and the
+// collaborator view at `repo access list` (repo_access.go).
 func newRepoMirrorCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "mirror",
 		Short: "Manage GitHub-mirror placements on EntireDB clusters",
 	}
-	cmd.AddCommand(newRepoMirrorCreateCmd())
+	cmd.AddCommand(newRepoMirrorAddCmd())
 	cmd.AddCommand(newRepoMirrorListCmd())
 	cmd.AddCommand(newRepoMirrorGetCmd())
-	cmd.AddCommand(newRepoMirrorUseCmd())
 	cmd.AddCommand(newRepoMirrorRemoveCmd())
-	cmd.AddCommand(newRepoMirrorCollaboratorsCmd())
 	return cmd
 }
 
-func newRepoMirrorCreateCmd() *cobra.Command {
+func newRepoMirrorAddCmd() *cobra.Command {
 	var (
-		noWait      bool
-		waitTimeout time.Duration
+		opts    mirrorCreateOptions
+		cluster string
 	)
 	cmd := &cobra.Command{
-		Use:   "create [github-url] [cluster-host]",
+		Use:   "add [github-url]",
 		Short: "Register a GitHub mirror on a cluster",
 		Long: "With no arguments, launches an interactive wizard: pick repos to " +
 			"mirror, pick one or more regions, then creates every (repo, region) " +
 			"mirror in parallel and prints the clone URLs.\n\n" +
 			"With a <github-url>, submits a mirror request for that repo on " +
-			"the target cluster, then waits for the initial GitHub→EntireDB clone " +
+			"the cluster named by --cluster, then waits for the initial GitHub→EntireDB clone " +
 			"to finish so `git clone` works on return. Pass --no-wait to return " +
 			"as soon as the placement is registered. Idempotent on " +
-			"(upstream, cluster). When the cluster-host is omitted, an " +
+			"(upstream, cluster). When --cluster is omitted, an " +
 			"interactive terminal offers the available clusters as a picker; " +
 			"non-interactive runs default to " + defaultClusterHost + ".",
-		Example: "  entire repo mirror create\n" +
-			"  entire repo mirror create github.com/octocat/hello-world\n" +
-			"  entire repo mirror create github.com/octocat/hello-world aws-us-east-2.entire.io",
-		Args: cobra.RangeArgs(0, 2),
+		Example: "  entire repo mirror add\n" +
+			"  entire repo mirror add github.com/octocat/hello-world\n" +
+			"  entire repo mirror add github.com/octocat/hello-world --cluster aws-us-east-2.entire.io",
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			opts := mirrorCreateOptions{noWait: noWait, timeout: waitTimeout}
 			if len(args) == 0 {
 				return runMirrorCreateWizard(cmd, opts)
 			}
-			owner, repo, err := parseGitHubURL(args[0])
-			if err != nil {
-				cmd.SilenceUsage = true
-				return fmt.Errorf("invalid <github-url>: %w", err)
-			}
-			// [cluster-host] omitted: on an interactive terminal, offer the
-			// catalog's clusters as a picker (the same prompt-only-when-there-
-			// is-a-choice shape as `repo clone`); non-interactive invocations
-			// keep the fixed defaultClusterHost so scripts get stable behavior.
-			var clusterHost string
-			if len(args) > 1 {
-				clusterHost = args[1]
-			} else {
-				var rerr error
-				if clusterHost, rerr = resolveOneShotClusterHost(cmd); rerr != nil {
-					return rerr
-				}
-			}
-			if err := validateClusterHost(clusterHost); err != nil {
-				cmd.SilenceUsage = true
-				return fmt.Errorf("invalid [cluster-host]: %w", err)
-			}
-			return runCoreForCluster(cmd, clusterHost, func(ctx context.Context, c *coreapi.Client) error {
-				errW := cmd.ErrOrStderr()
-				var finishPhase func(bool)
-				opts.onPhase = func(next mirrorCreatePhase) {
-					if finishPhase != nil {
-						finishPhase(true)
-					}
-					finishPhase = startSpinner(errW, fmt.Sprintf("%s mirror %s/%s into %s", next.label(), owner, repo, clusterHost))
-				}
-				outcome, err := createAndAwaitMirror(ctx, c, owner, repo, clusterHost, opts)
-				if finishPhase != nil {
-					finishPhase(err == nil)
-				}
-				return reportOneShotMirror(cmd.OutOrStdout(), errW, outcome, err)
-			})
+			return runMirrorAdd(cmd, args[0], cluster, opts)
 		},
 	}
-	cmd.Flags().BoolVar(&noWait, "no-wait", false, "Return once the placement is registered, without waiting for the initial clone")
-	cmd.Flags().DurationVar(&waitTimeout, "wait-timeout", 30*time.Minute, "How long to wait for mirror request submission, placement, and clone readiness")
+	cmd.Flags().StringVar(&cluster, "cluster", "", "Cluster host to mirror onto (a terminal offers the available clusters when omitted; other runs use "+defaultClusterHost+")")
+	cmd.Flags().BoolVar(&opts.noWait, "no-wait", false, "Return once the placement is registered, without waiting for the initial clone")
+	cmd.Flags().DurationVar(&opts.timeout, "timeout", 30*time.Minute, "How long to wait for mirror request submission, placement, and clone readiness")
 	return cmd
+}
+
+// runMirrorAdd is the one-shot `repo mirror add <github-url>` body: pick the
+// cluster when none was named, then create the mirror and wait per opts.
+func runMirrorAdd(cmd *cobra.Command, githubURL, clusterHost string, opts mirrorCreateOptions) error {
+	owner, repo, err := parseGitHubURL(githubURL)
+	if err != nil {
+		cmd.SilenceUsage = true
+		return fmt.Errorf("invalid <github-url>: %w", err)
+	}
+	// --cluster omitted: on an interactive terminal, offer the catalog's
+	// clusters as a picker (the same prompt-only-when-there-is-a-choice shape
+	// as `repo clone`); non-interactive invocations keep the fixed
+	// defaultClusterHost so scripts get stable behavior.
+	if clusterHost == "" {
+		if clusterHost, err = resolveOneShotClusterHost(cmd); err != nil {
+			return err
+		}
+	}
+	if err := validateClusterHost(clusterHost); err != nil {
+		cmd.SilenceUsage = true
+		return fmt.Errorf("invalid --cluster: %w", err)
+	}
+	return runCoreForCluster(cmd, clusterHost, func(ctx context.Context, c *coreapi.Client) error {
+		errW := cmd.ErrOrStderr()
+		var finishPhase func(bool)
+		opts.onPhase = func(next mirrorCreatePhase) {
+			if finishPhase != nil {
+				finishPhase(true)
+			}
+			finishPhase = startSpinner(errW, fmt.Sprintf("%s mirror %s/%s into %s", next.label(), owner, repo, clusterHost))
+		}
+		outcome, err := createAndAwaitMirror(ctx, c, owner, repo, clusterHost, opts)
+		if finishPhase != nil {
+			finishPhase(err == nil)
+		}
+		return reportOneShotMirror(cmd.OutOrStdout(), errW, outcome, err)
+	})
 }
 
 // mirrorCreateOutcome bundles the create response with the clone status
@@ -611,7 +593,7 @@ func createAndAwaitMirror(ctx context.Context, c *coreapi.Client, owner, repo, c
 	return outcome, werr
 }
 
-// reportOneShotMirror renders the human output for `repo mirror create
+// reportOneShotMirror renders the human output for `repo mirror add
 // <github-url>` from the shared createAndAwaitMirror result. A nil
 // outcome.created means mirror placement failed — surface that error (nothing
 // was printed yet). Otherwise echo the placement, then the lifecycle outcome.
@@ -1258,31 +1240,33 @@ func badMirrorRefErr(err error) error {
 }
 
 func newRepoMirrorRemoveCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "remove <github-url> [cluster-host]",
+	var cluster string
+	cmd := &cobra.Command{
+		Use:   "remove <github-url>",
 		Short: "Un-register a GitHub mirror from a cluster",
-		Long: "Removes a mirror placement for a GitHub repo from the target " +
-			"cluster. Other clusters' placements of the same upstream are " +
-			"unaffected. The cluster-host defaults to " + defaultClusterHost +
-			" when omitted.",
-		Example: "  entire repo mirror remove github.com/octocat/hello-world",
-		Args:    cobra.RangeArgs(1, 2),
+		Long: "Removes a mirror placement for a GitHub repo from the cluster " +
+			"named by --cluster (default " + defaultClusterHost + "). Other " +
+			"clusters' placements of the same upstream are unaffected.",
+		Example: "  entire repo mirror remove github.com/octocat/hello-world\n" +
+			"  entire repo mirror remove github.com/octocat/hello-world --cluster aws-eu-central-1.entire.io",
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			owner, repo, err := parseGitHubURL(args[0])
 			if err != nil {
 				cmd.SilenceUsage = true
 				return fmt.Errorf("invalid <github-url>: %w", err)
 			}
-			clusterHost := clusterArg(args)
-			if err := validateClusterHost(clusterHost); err != nil {
+			if err := validateClusterHost(cluster); err != nil {
 				cmd.SilenceUsage = true
-				return fmt.Errorf("invalid [cluster-host]: %w", err)
+				return fmt.Errorf("invalid --cluster: %w", err)
 			}
-			return runCoreForCluster(cmd, clusterHost, func(ctx context.Context, c *coreapi.Client) error {
-				return removeMirror(ctx, cmd.OutOrStdout(), c, owner, repo, clusterHost)
+			return runCoreForCluster(cmd, cluster, func(ctx context.Context, c *coreapi.Client) error {
+				return removeMirror(ctx, cmd.OutOrStdout(), c, owner, repo, cluster)
 			})
 		},
 	}
+	cmd.Flags().StringVar(&cluster, "cluster", defaultClusterHost, "Cluster host the mirror is on")
+	return cmd
 }
 
 // removeMirror deletes the (owner, repo) placement on clusterHost via c and

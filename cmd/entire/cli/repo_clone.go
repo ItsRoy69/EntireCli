@@ -393,7 +393,7 @@ func newRepoCloneCmd() *cobra.Command {
 			// different context is active failed with "not mirrored on ..."). Dial
 			// the core fronting that cluster — discovered from its well-known and
 			// authenticated with the matching local context, the same path
-			// `mirror create <url> [cluster]` uses — so the lookup resolves against
+			// `mirror add <url> --cluster <host>` uses — so the lookup resolves against
 			// the right federation. With no --cluster, list from the active context.
 			runWithCore := runCore
 			if cluster != "" {
@@ -409,7 +409,7 @@ func newRepoCloneCmd() *cobra.Command {
 			}
 
 			if len(placements) == 0 {
-				return fmt.Errorf("no mirror found for /gh/%s/%s; run 'entire repo mirror create github.com/%s/%s' to onboard it", owner, repo, owner, repo)
+				return fmt.Errorf("no mirror found for /gh/%s/%s; run 'entire repo mirror add github.com/%s/%s' to onboard it", owner, repo, owner, repo)
 			}
 
 			chosen, err := selectCloneTarget(cmd, placements, cluster)

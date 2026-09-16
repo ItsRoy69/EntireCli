@@ -34,7 +34,7 @@ const (
 	mirrorStatusRegistered = "registered" // placement created, clone in progress (--no-wait)
 	mirrorStatusSuspended  = "suspended"  // placement exists but the cluster won't serve it
 	mirrorStatusFailed     = "failed"     // initial clone reached the terminal failed status
-	mirrorStatusTimedOut   = "timed out"  // clone didn't finish within --wait-timeout
+	mirrorStatusTimedOut   = "timed out"  // clone didn't finish within --timeout
 	mirrorStatusError      = "error"      // create or poll failed
 )
 
@@ -183,8 +183,8 @@ func regionLabel(r regionChoice) string {
 	}
 }
 
-// resolveOneShotClusterHost picks the cluster `repo mirror create
-// <github-url>` targets when [cluster-host] is omitted. Non-interactive
+// resolveOneShotClusterHost picks the cluster `repo mirror add
+// <github-url>` targets when --cluster is omitted. Non-interactive
 // callers keep the fixed defaultClusterHost so scripts stay stable and
 // offline-resolvable; on a terminal the control plane's cluster catalog is
 // offered as a single-select (skipped when only one cluster exists),
@@ -218,7 +218,7 @@ func resolveOneShotClusterHost(cmd *cobra.Command) (string, error) {
 		return "", err
 	}
 	if len(regions) == 0 {
-		return "", errors.New("no clusters available to mirror into; pass [cluster-host] explicitly")
+		return "", errors.New("no clusters available to mirror into; pass --cluster explicitly")
 	}
 	if len(regions) == 1 {
 		fmt.Fprintf(errW, "Using cluster %s\n", regions[0].host)
@@ -246,20 +246,20 @@ func pickOneCluster(ctx context.Context, w io.Writer, regions []regionChoice, ju
 		),
 	)
 	if err := form.RunWithContext(ctx); err != nil {
-		if cerr := handleFormCancellation(w, "Mirror create", err); cerr != nil {
+		if cerr := handleFormCancellation(w, "Mirror add", err); cerr != nil {
 			return "", cerr
 		}
-		return "", NewSilentError(errors.New("mirror create cancelled"))
+		return "", NewSilentError(errors.New("mirror add cancelled"))
 	}
 	// Guard the selection against the offered hosts (like repo clone's
 	// picker) so a zero-value fall-through can't reach the caller as a
-	// misleading "invalid [cluster-host]" error.
+	// misleading "invalid --cluster" error.
 	for _, r := range regions {
 		if r.host == selected {
 			return selected, nil
 		}
 	}
-	return "", NewSilentError(errors.New("mirror create cancelled"))
+	return "", NewSilentError(errors.New("mirror add cancelled"))
 }
 
 // mirrorTarget is one unit of work: a selected repo to be mirrored into a
@@ -302,7 +302,7 @@ func mirrorCreateResultRow(r mirrorResult) []string {
 	return []string{r.owner + "/" + r.repo, r.regionLabel, r.status, url}
 }
 
-// runMirrorCreateWizard is the zero-argument `entire repo mirror create` flow:
+// runMirrorCreateWizard is the zero-argument `entire repo mirror add` flow:
 // verify auth, pick repos, pick regions, then create the cross-product of
 // mirrors in parallel and report the clone URLs.
 func runMirrorCreateWizard(cmd *cobra.Command, opts mirrorCreateOptions) error {
@@ -315,8 +315,8 @@ func runMirrorCreateWizard(cmd *cobra.Command, opts mirrorCreateOptions) error {
 	// Without one (CI, pipes), fail fast with a clear pointer at the
 	// non-interactive form rather than letting huh error obscurely.
 	if !interactive.CanPromptInteractively() {
-		fmt.Fprintln(errW, "The mirror create wizard needs an interactive terminal.")
-		fmt.Fprintln(errW, "Run 'entire repo mirror create <github-url> [cluster-host]' to create one non-interactively.")
+		fmt.Fprintln(errW, "The mirror add wizard needs an interactive terminal.")
+		fmt.Fprintln(errW, "Run 'entire repo mirror add <github-url> --cluster <host>' to create one non-interactively.")
 		return NewSilentError(errors.New("not an interactive terminal"))
 	}
 
@@ -447,7 +447,7 @@ func pickRepos(ctx context.Context, w io.Writer, repos []coreapi.AvailableMirror
 		),
 	)
 	if err := form.RunWithContext(ctx); err != nil {
-		return nil, handleFormCancellation(w, "Mirror create", err)
+		return nil, handleFormCancellation(w, "Mirror add", err)
 	}
 
 	chosen := make([]coreapi.AvailableMirror, 0, len(selected))
@@ -487,7 +487,7 @@ func pickRegions(ctx context.Context, w io.Writer, regions []regionChoice, juris
 		),
 	)
 	if err := form.RunWithContext(ctx); err != nil {
-		return nil, handleFormCancellation(w, "Mirror create", err)
+		return nil, handleFormCancellation(w, "Mirror add", err)
 	}
 
 	chosen := make([]regionChoice, 0, len(selected))

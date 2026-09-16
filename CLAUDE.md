@@ -65,7 +65,7 @@ the commands are always runnable in every build.
 - `configure`: bare prints help and a hint pointing at `entire agent`; flags
   manage non-agent settings (telemetry, git-hook installation mode, strategy
   options, summary provider). Agent CRUD lives under `entire agent`.
-- `auth`: `login`, `logout`, `status`, `contexts`, `use`, plus
+- `auth`: `login`, `logout`, `status`, `contexts`, `switch`, plus
   `token` (prints the active control-plane bearer to stdout for scripting/curl;
   honors `ENTIRE_TOKEN`, else the refreshed active-context login JWT). `token`
   also takes `--jurisdiction <slug>` (e.g. `us`, `eu`), which instead mints a
@@ -80,9 +80,12 @@ the commands are always runnable in every build.
 - `doctor`: bare runs the scan-and-fix flow, plus `trace`, `logs`, `bundle`
 - `org`: control-plane organization management — `create`, `list`, `get`, `delete`
 - `project`: control-plane project management — `create`, `list`, `get`, `delete`
-- `repo`: control-plane repository lifecycle — `create`, `list`, `get`, `delete`,
-  `clone`, plus the `mirror`, `visibility` and `protection` subtrees. Git
-  content operations (log, diff, …) are intentionally out of scope.
+- `repo`: control-plane repository lifecycle — `create`, `list --project`,
+  `view`, `edit`, `delete`, `clone`, plus the `mirror`, `remote`, `access`,
+  `visibility` and `protection` subtrees. Verb names follow the GitHub CLI
+  where the job is the same (`view`, `edit --visibility`, `auth switch`), per
+  the unified-repo-commands proto. Git content operations (log, diff, …) are
+  intentionally out of scope.
   `protection` (`list`, `add [--server-side-merge-only]`, `remove`) edits a
   native repo's branch-protection rules through core's
   `/repos/{repoId}/branch-protection` resource: `add` and `remove` are one
@@ -92,13 +95,16 @@ the commands are always runnable in every build.
   branch without the flag never lowers it and `--server-side-merge-only=false`
   is the explicit way down. A short branch name expands to `refs/heads/`,
   `HEAD` and `refs/...` pass through. The `mirror` subtree is
-  server-side (`create`, `list`, `get`, `remove`, `collaborators`) with one
-  exception: `mirror use` repoints the *current clone's* git remote at a mirror
-  (local git config only — it creates nothing server-side). Interactively it
-  picks among the repo's placements and asks whether to replace the remote
-  (preserving the old URL under `--upstream`) or add a separate one;
-  non-interactively it repoints `--remote` directly. Both `use` and `clone`
-  choose a placement through the shared `selectPlacement` picker. `clone`
+  server-side (`add`, `list`, `get`, `remove`; `add` and `remove` name the
+  cluster with `--cluster <host>`). `remote use` repoints the *current
+  clone's* git remote at a mirror (local git config only — it creates nothing
+  server-side). Interactively it picks among the repo's placements and asks
+  whether to replace the remote (preserving the old URL under `--upstream`) or
+  add a separate one; non-interactively it repoints `--remote` directly. Both
+  `remote use` and `clone` choose a placement through the shared
+  `selectPlacement` picker. `access list` shows who can pull a mirror (live
+  GitHub-admin gated). `edit --visibility` sets a native repo's visibility;
+  `visibility get` reads it. `clone`
   accepts a native `/et/<project>/<repo>` ref, a mirror `/gh/<owner>/<repo>`
   ref, or a full `entire://` URL passed through verbatim. **Every ref names its
   forge**: the leading token alone decides which grammar is tried, and the bare
@@ -116,8 +122,8 @@ the commands are always runnable in every build.
   either.
   The native `/et/<project>/<repo>` path is **not** clone-only: it is the
   `path` the API returns, and `resolveRepoRef` accepts it for every command
-  that takes a repo ref — `get`, `delete`, the `visibility` and `protection`
-  subtrees, and `grant repo add`/`list`/`remove` (COR-1632). The other two
+  that takes a repo ref — `view`, `edit`, `delete`, the `visibility` and
+  `protection` subtrees, and `grant repo add`/`list`/`remove` (COR-1632). The other two
   clone shapes are not: a `/gh/` mirror ref is refused there (the by-name
   lookup resolves a project and then a repo inside it, and a mirror is in no
   project — so a mirror is addressed by ULID), and an `entire://` URL is not
@@ -125,7 +131,7 @@ the commands are always runnable in every build.
   the control plane has no by-name repo route that is not project-scoped; the
   path form is checked against it for agreement, and a ULID warns that it is
   ignored rather than validating, which would cost a `GetRepo` on every command
-  but `repo get`.
+  but `repo view`.
   Native names are validated client-side against the server's own rules
   (`nativeProjectRe`/`nativeRepoRe`, mirroring `normalizeName` in entiredb
   `core/resource/project_name.go`); those bounds are server parity only and buy

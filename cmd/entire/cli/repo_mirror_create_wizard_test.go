@@ -118,7 +118,7 @@ func TestRunMirrorCreateWizard_RequiresTTY(t *testing.T) {
 	require.ErrorAs(t, err, &silent)
 	require.Empty(t, out.String(), "stdout must stay clean")
 	require.Contains(t, errOut.String(), "interactive terminal")
-	require.Contains(t, errOut.String(), "entire repo mirror create <github-url>")
+	require.Contains(t, errOut.String(), "entire repo mirror add <github-url>")
 }
 
 func TestSelectableAvailableRepos(t *testing.T) {
