@@ -150,7 +150,7 @@ Systematize the ahead/behind/diverged/disconnected × operation matrix that item
 
 ## 5. Suggested sequencing
 
-1. **PR 1 — infrastructure**: I-1 (backend matrix for integration), I-2 (real-hook push helpers + RunPrePush stdin), I-4 (hermeticity tripwire). Immediately re-run the existing remote suites under git-refs; expect it to surface real bugs the same way the e2e matrix did (`refs-v1` policy, explain-clone fetch).
+1. **PR 1 — infrastructure**: I-1 (backend matrix for integration), I-2 (real-hook push helpers + RunPrePush stdin), I-4 (hermeticity tripwire). Immediately re-run the existing remote suites under git-refs; expect it to surface real bugs the same way the e2e matrix did (explain-clone fetch).
 2. **PR 2 — P0 hook & cross-machine**: A1–A6, C1–C4, plus e2e G1.
 3. **PR 3 — divergence matrix**: D1–D7 (D4/D5 fill known untested regressions).
 4. **PR 4 — remote-name/upstream pinning**: B1–B7 after a decision on D-1 (or with explicit "pins current behavior" markers).
