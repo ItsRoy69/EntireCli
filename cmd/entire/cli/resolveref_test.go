@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -480,6 +481,9 @@ func TestResolveRepoPath(t *testing.T) {
 
 	t.Run("anything but the native path is refused without a request", func(t *testing.T) {
 		t.Parallel()
+		// A ref that never named the et/ token gets the accepted shape and
+		// nothing else: the parser's "not a native ref" reason is its signal to
+		// try another grammar, not a message for the user.
 		for _, ref := range []string{ulidRepoWeb, "web", "widgets/web", "/gh/acme/tool"} {
 			t.Run(ref, func(t *testing.T) {
 				t.Parallel()
@@ -487,7 +491,28 @@ func TestResolveRepoPath(t *testing.T) {
 					w.WriteHeader(http.StatusInternalServerError)
 				})
 				_, err := resolveRepoPath(context.Background(), c, ref)
-				require.ErrorContains(t, err, "must be a /et/<project>/<repo> path")
+				require.EqualError(t, err, "repo "+strconv.Quote(ref)+" must be a /et/<project>/<repo> path")
+				require.Zero(t, calls.Load())
+			})
+		}
+	})
+
+	t.Run("a malformed native path keeps the parser's reason", func(t *testing.T) {
+		t.Parallel()
+		// The ref named et/ and got the rest wrong, so the parser knows which
+		// part: that reason is specific to what was typed and stays.
+		for ref, reason := range map[string]string{
+			"/et/widgets":       "2 names after the et token, got 1",
+			"/et/widgets/-bad-": `repo "-bad-" is not a name the server accepts`,
+		} {
+			t.Run(ref, func(t *testing.T) {
+				t.Parallel()
+				c, calls := resolveTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+					w.WriteHeader(http.StatusInternalServerError)
+				})
+				_, err := resolveRepoPath(context.Background(), c, ref)
+				require.ErrorContains(t, err, "must be a /et/<project>/<repo> path: ")
+				require.ErrorContains(t, err, reason)
 				require.Zero(t, calls.Load())
 			})
 		}
