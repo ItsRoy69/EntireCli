@@ -302,9 +302,9 @@ func TestResolveMirrorUseUpstream(t *testing.T) {
 		wantErr   string
 	}{
 		{
-			name:      "explicit github url wins over origin",
+			name:      "explicit repository reference wins over origin",
 			remotes:   map[string]string{"origin": "git@github.com:other/repo.git"},
-			arg:       "github.com/OctoCat/Hello-World",
+			arg:       "/gh/OctoCat/Hello-World",
 			wantOwner: "octocat", wantRepo: "hello-world",
 		},
 		{
@@ -357,11 +357,11 @@ func TestResolveMirrorUseUpstream(t *testing.T) {
 		{
 			name:    "invalid explicit url errors",
 			arg:     "https://gitlab.com/a/b",
-			wantErr: "invalid <github-url>",
+			wantErr: "invalid <repo>",
 		},
 		{
 			name:    "no remotes errors with a pointer",
-			wantErr: "pass the GitHub URL explicitly",
+			wantErr: "pass a repository reference explicitly",
 		},
 		{
 			name:    "non-github origin errors naming the reason",

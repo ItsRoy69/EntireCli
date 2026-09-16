@@ -52,21 +52,21 @@ func newRepoAccessCmd() *cobra.Command {
 func newRepoAccessListCmd() *cobra.Command {
 	var cluster string
 	cmd := &cobra.Command{
-		Use:   "list <github-url>",
+		Use:   cmdListRepo,
 		Short: "List the users with access to a mirror (live GitHub-admin gated)",
-		Long: "Lists the principals that can pull the mirror of <github-url> on " +
+		Long: "Lists the principals that can pull the mirror of <repo> on " +
 			"the cluster named by --cluster (default " + defaultClusterHost + "), " +
 			"with their reader/writer role resolved from the control plane. The " +
 			"caller must be a live GitHub admin of the upstream (org repo) or its " +
-			"owner (user repo).",
-		Example: "  entire repo access list github.com/acme/widget\n" +
-			"  entire repo access list github.com/acme/widget --cluster aws-eu-central-1.entire.io",
+			"owner (user repo).\n\n" + mirrorRepoRefHelp,
+		Example: "  entire repo access list /gh/acme/widget\n" +
+			"  entire repo access list /gh/acme/widget --cluster aws-eu-central-1.entire.io",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			owner, repo, err := parseGitHubURL(args[0])
+			owner, repo, err := parseGitHubMirrorRepoRef(args[0])
 			if err != nil {
 				cmd.SilenceUsage = true
-				return fmt.Errorf("invalid <github-url>: %w", err)
+				return err
 			}
 			clusterHost := cluster
 			if err := validateClusterHost(clusterHost); err != nil {

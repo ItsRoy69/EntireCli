@@ -1605,7 +1605,7 @@ func TestBuildRepoDir(t *testing.T) {
 }
 
 // TestResolveOneShotClusterHost_NonInteractive locks in that a non-interactive
-// `repo mirror add <github-url>` keeps the fixed defaultClusterHost without
+// `repo mirror add <repo>` keeps the fixed defaultClusterHost without
 // dialing the control plane — scripts must get a stable, offline default. Under
 // `go test`, CanPromptInteractively() is false, so this exercises exactly the
 // script path; no server is running, so any catalog fetch would error.
@@ -2068,7 +2068,7 @@ func TestRepoMirrorRemove_ClusterFlag(t *testing.T) {
 	}
 
 	t.Run("--cluster names the cluster", func(t *testing.T) {
-		stdout, err := run("github.com/o/r", "--cluster", "eu.example")
+		stdout, err := run("/gh/o/r", "--cluster", "eu.example")
 		require.NoError(t, err)
 		require.Contains(t, stdout, "Removed mirror github.com/o/r from eu.example")
 		require.Equal(t, []string{"eu.example"}, *hosts)
@@ -2117,7 +2117,7 @@ func TestRepoAccessList_ClusterFlag(t *testing.T) {
 	}
 
 	t.Run("--cluster names the placement", func(t *testing.T) {
-		stdout, err := run("github.com/o/r", "--cluster", "eu.example")
+		stdout, err := run("/gh/o/r", "--cluster", "eu.example")
 		require.NoError(t, err)
 		require.Contains(t, stdout, "alice")
 		require.Equal(t, []string{"eu.example"}, listed)

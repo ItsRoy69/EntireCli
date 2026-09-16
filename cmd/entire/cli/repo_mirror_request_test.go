@@ -123,7 +123,7 @@ func assertMirrorAddReachesArgumentValidation(t *testing.T) {
 	t.Helper()
 	cmd := newRepoMirrorAddCmd()
 	cmd.SetArgs([]string{"not-a-github-url"})
-	require.ErrorContains(t, cmd.Execute(), "not a recognized GitHub URL")
+	require.ErrorContains(t, cmd.Execute(), "invalid <repo>")
 }
 
 func TestCreateAndAwaitMirror_AsyncFailures(t *testing.T) {
@@ -467,7 +467,7 @@ func TestRepoMirrorAdd_AsyncDefaultWhenSettingsFail(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	cmd.SetOut(&stdout)
 	cmd.SetErr(&stderr)
-	cmd.SetArgs([]string{"mirror", "add", "--no-wait", "--cluster", "aws-us-east-2.entire.io", "github.com/owner/repo"})
+	cmd.SetArgs([]string{"mirror", "add", "--no-wait", "--cluster", "aws-us-east-2.entire.io", "/gh/owner/repo"})
 	require.NoError(t, cmd.ExecuteContext(t.Context()))
 	require.Contains(t, stdout.String(), "Mirror placed at entire://cluster/gh/owner/repo")
 	require.Contains(t, stdout.String(), "Mirror ID: mirror-1")

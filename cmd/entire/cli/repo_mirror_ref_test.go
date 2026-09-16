@@ -1,0 +1,55 @@
+package cli
+
+import (
+	"bytes"
+	"testing"
+
+	"github.com/spf13/cobra"
+	"github.com/stretchr/testify/require"
+)
+
+func TestParseGitHubMirrorRepoRef(t *testing.T) {
+	t.Parallel()
+	for _, ref := range []string{"/gh/Acme/Widget.git", "gh/acme/widget", "https://github.com/acme/widget.git", "git@github.com:acme/widget.git", "github.com/acme/widget"} {
+		t.Run(ref, func(t *testing.T) {
+			t.Parallel()
+			owner, repo, err := parseGitHubMirrorRepoRef(ref)
+			require.NoError(t, err)
+			require.Equal(t, "acme", owner)
+			require.Equal(t, "widget", repo)
+		})
+	}
+	for _, ref := range []string{"acme/widget", "/gh/acme/..", "/et/project/..", "https://gitlab.com/acme/widget"} {
+		t.Run(ref, func(t *testing.T) {
+			t.Parallel()
+			_, _, err := parseGitHubMirrorRepoRef(ref)
+			require.ErrorContains(t, err, "invalid <repo>")
+		})
+	}
+}
+
+func TestMirrorCommands_NativeRepoUnsupported(t *testing.T) {
+	t.Parallel()
+	for name, newCmd := range map[string]func() *cobra.Command{
+		"mirror add":    newRepoMirrorAddCmd,
+		"mirror remove": newRepoMirrorRemoveCmd,
+		"access list":   newRepoAccessListCmd,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			cmd := newCmd()
+			cmd.SetOut(&bytes.Buffer{})
+			cmd.SetErr(&bytes.Buffer{})
+			cmd.SetArgs([]string{"/et/project/widget"})
+			err := cmd.ExecuteContext(t.Context())
+			require.ErrorContains(t, err, "does not support Entire repository")
+			require.NotContains(t, err.Error(), "invalid")
+		})
+	}
+	t.Run("remote use", func(t *testing.T) {
+		t.Parallel()
+		_, _, err := resolveMirrorUseUpstream(t.Context(), t.TempDir(), "origin", "/et/project/widget")
+		require.ErrorContains(t, err, "does not support Entire repository")
+		require.NotContains(t, err.Error(), "invalid")
+	})
+}

@@ -102,6 +102,24 @@ func TestCreateOneMirror_PollErrorRendersCleanDetail(t *testing.T) {
 	require.NotContains(t, res.err.Error(), "code 404")
 }
 
+func TestRepoMirrorAdd_ClusterRequiresRepo(t *testing.T) {
+	t.Parallel()
+	for _, cluster := range []string{"eu.example", "", "not a host"} {
+		t.Run(cluster, func(t *testing.T) {
+			t.Parallel()
+			cmd := newRepoMirrorAddCmd()
+			var out, errOut bytes.Buffer
+			cmd.SetOut(&out)
+			cmd.SetErr(&errOut)
+			cmd.SetArgs([]string{"--cluster", cluster})
+			err := cmd.ExecuteContext(t.Context())
+			require.ErrorContains(t, err, "--cluster requires <repo>")
+			require.Empty(t, out.String())
+			require.NotContains(t, errOut.String(), "wizard needs an interactive terminal")
+		})
+	}
+}
+
 func TestRunMirrorCreateWizard_RequiresTTY(t *testing.T) {
 	t.Parallel()
 	// In-process tests are non-interactive, so the wizard must refuse before
@@ -118,7 +136,7 @@ func TestRunMirrorCreateWizard_RequiresTTY(t *testing.T) {
 	require.ErrorAs(t, err, &silent)
 	require.Empty(t, out.String(), "stdout must stay clean")
 	require.Contains(t, errOut.String(), "interactive terminal")
-	require.Contains(t, errOut.String(), "entire repo mirror add <github-url>")
+	require.Contains(t, errOut.String(), "entire repo mirror add <repo>")
 }
 
 func TestSelectableAvailableRepos(t *testing.T) {

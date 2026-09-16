@@ -184,7 +184,7 @@ func regionLabel(r regionChoice) string {
 }
 
 // resolveOneShotClusterHost picks the cluster `repo mirror add
-// <github-url>` targets when --cluster is omitted. Non-interactive
+// <repo>` targets when --cluster is omitted. Non-interactive
 // callers keep the fixed defaultClusterHost so scripts stay stable and
 // offline-resolvable; on a terminal the control plane's cluster catalog is
 // offered as a single-select (skipped when only one cluster exists),
@@ -316,7 +316,7 @@ func runMirrorCreateWizard(cmd *cobra.Command, opts mirrorCreateOptions) error {
 	// non-interactive form rather than letting huh error obscurely.
 	if !interactive.CanPromptInteractively() {
 		fmt.Fprintln(errW, "The mirror add wizard needs an interactive terminal.")
-		fmt.Fprintln(errW, "Run 'entire repo mirror add <github-url> --cluster <host>' to create one non-interactively.")
+		fmt.Fprintln(errW, "Run 'entire repo mirror add <repo> --cluster <host>' to create one non-interactively.")
 		return NewSilentError(errors.New("not an interactive terminal"))
 	}
 
@@ -426,7 +426,7 @@ func pickRepos(ctx context.Context, w io.Writer, repos []coreapi.AvailableMirror
 	for i, m := range repos {
 		key := m.Owner + "/" + m.Repo
 		repoByKey[key] = m
-		options[i] = huh.NewOption(key, key)
+		options[i] = huh.NewOption("/"+mirrorCloneForge+"/"+key, key)
 	}
 
 	var selected []string

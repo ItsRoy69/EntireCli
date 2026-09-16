@@ -96,7 +96,12 @@ the commands are always runnable in every build.
   is the explicit way down. A short branch name expands to `refs/heads/`,
   `HEAD` and `refs/...` pass through. The `mirror` subtree is
   server-side (`add`, `list`, `get`, `remove`; `add` and `remove` name the
-  cluster with `--cluster <host>`). `remote use` repoints the *current
+  cluster with `--cluster <host>`). Mirror `add`/`remove`, `remote use`, and
+  `access list` name their argument `<repo>`: `/gh/<owner>/<repo>` is the
+  canonical reference; host-qualified GitHub URLs remain accepted, while bare
+  pairs require a forge prefix. These operations currently support GitHub
+  mirrors only; valid `/et/<project>/<repo>` references report an unsupported
+  operation rather than invalid syntax. `remote use` repoints the *current
   clone's* git remote at a mirror (local git config only — it creates nothing
   server-side). Interactively it picks among the repo's placements and asks
   whether to replace the remote (preserving the old URL under `--upstream`) or

@@ -350,7 +350,7 @@ func runMirrorUseForm(cmd *cobra.Command, action string, form *huh.Form) error {
 const mirrorUseForge = "gh"
 
 // resolveMirrorUseUpstream determines the GitHub upstream `remote use` should
-// look for mirrors of. An explicit [github-url] wins. Otherwise the coordinates
+// look for mirrors of. An explicit [repo] wins. Otherwise the coordinates
 // are read from a configured remote — which already names the repo the user is
 // standing in.
 //
@@ -365,9 +365,9 @@ const mirrorUseForge = "gh"
 // the URL path), so switching clusters never needs the repo retyped.
 func resolveMirrorUseUpstream(ctx context.Context, dir, remote, arg string) (owner, repo string, err error) {
 	if arg != "" {
-		owner, repo, err = parseGitHubURL(arg)
+		owner, repo, err = parseGitHubMirrorRepoRef(arg)
 		if err != nil {
-			return "", "", fmt.Errorf("invalid <github-url>: %w", err)
+			return "", "", err
 		}
 		return owner, repo, nil
 	}
@@ -396,7 +396,7 @@ func resolveMirrorUseUpstream(ctx context.Context, dir, remote, arg string) (own
 		}
 		return strings.ToLower(info.Owner), strings.ToLower(info.Repo), nil
 	}
-	return "", "", fmt.Errorf("cannot tell which repo to mirror from the git remotes (tried %s); pass the GitHub URL explicitly", strings.Join(tried, ", "))
+	return "", "", fmt.Errorf("cannot tell which repo to mirror from the git remotes (tried %s); pass a repository reference explicitly (for example, /gh/owner/repo)", strings.Join(tried, ", "))
 }
 
 // newRepoRemoteCmd is the `entire repo remote` subtree: verbs that edit the
@@ -413,7 +413,7 @@ func newRepoRemoteCmd() *cobra.Command {
 func newRepoRemoteUseCmd() *cobra.Command {
 	var remote, upstream, cluster string
 	cmd := &cobra.Command{
-		Use:   "use [github-url]",
+		Use:   "use [repo]",
 		Short: "Point this clone's git remote at an Entire mirror",
 		Long: "Rewrites the local git remote so fetch and push go through an " +
 			"Entire mirror instead of the forge.\n\n" +
@@ -426,11 +426,11 @@ func newRepoRemoteUseCmd() *cobra.Command {
 			"Non-interactively it repoints --remote (default `origin`) directly, " +
 			"preserving the replaced URL under --upstream. It only ever edits " +
 			"local git config — the mirror must already exist (`entire repo " +
-			"mirror add`); nothing server-side is changed.",
+			"mirror add`); nothing server-side is changed.\n\n" + mirrorRepoRefHelp,
 		Example: "  entire repo remote use\n" +
 			"  entire repo remote use --cluster aws-us-east-2.entire.io\n" +
-			"  entire repo remote use github.com/octocat/hello-world\n" +
-			"  entire repo remote use github.com/octocat/hello-world --cluster aws-us-east-2.entire.io\n" +
+			"  entire repo remote use /gh/octocat/hello-world\n" +
+			"  entire repo remote use /gh/octocat/hello-world --cluster aws-us-east-2.entire.io\n" +
 			"  entire repo remote use --remote entire\n" +
 			"  entire repo remote use --upstream ''",
 		Args: cobra.MaximumNArgs(1),
@@ -486,7 +486,7 @@ func newRepoRemoteUseCmd() *cobra.Command {
 				return err
 			}
 			if len(placements) == 0 {
-				return fmt.Errorf("%s/%s is not mirrored (or you have no access to its mirrors); create one first:\n  entire repo mirror add github.com/%s/%s", owner, repo, owner, repo)
+				return fmt.Errorf("%s/%s is not mirrored (or you have no access to its mirrors); create one first:\n  entire repo mirror add /gh/%s/%s", owner, repo, owner, repo)
 			}
 
 			chosen, err := selectPlacement(cmd, placements, clusterHost, placementPicker{

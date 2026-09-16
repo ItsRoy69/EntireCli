@@ -421,7 +421,7 @@ func newGrantRepoAddCmd() *cobra.Command {
 func newGrantRepoListCmd() *cobra.Command {
 	var project string
 	cmd := &cobra.Command{
-		Use:   "list <repo>",
+		Use:   cmdListRepo,
 		Short: "List repo grants",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {

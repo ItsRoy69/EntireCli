@@ -409,7 +409,7 @@ func newRepoCloneCmd() *cobra.Command {
 			}
 
 			if len(placements) == 0 {
-				return fmt.Errorf("no mirror found for /gh/%s/%s; run 'entire repo mirror add github.com/%s/%s' to onboard it", owner, repo, owner, repo)
+				return fmt.Errorf("no mirror found for /gh/%s/%s; run 'entire repo mirror add /gh/%s/%s' to onboard it", owner, repo, owner, repo)
 			}
 
 			chosen, err := selectCloneTarget(cmd, placements, cluster)
