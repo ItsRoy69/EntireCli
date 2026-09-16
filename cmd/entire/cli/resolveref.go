@@ -317,16 +317,16 @@ func resolveRepoPathRef(ctx context.Context, c repoRefClient, ref, projectRef st
 // construction, so they take the by-name lookups directly rather than
 // resolveRepoRef, whose ULID passthrough would read a ULID-shaped NAME as an id.
 //
-// The parser's reason is shown only for a ref that named the et/ token and got
-// the rest wrong, where it says which part. For anything else it reads "not a
-// native ref", the parser's cue to try another grammar rather than a message
-// for the user, and the accepted shape is the whole answer.
+// A ref that never named the et/ token is answered with the accepted shape and
+// nothing else, before the parser runs: its "not a native ref" reason is the
+// cue to try another grammar, not a message for the user. A ref that named the
+// token and got the rest wrong keeps the parser's reason, which says which part.
 func resolveRepoPath(ctx context.Context, c repoRefClient, ref string) (string, error) {
+	if !declaresForge(ref, nativeCloneForge) {
+		return "", fmt.Errorf("repo %q must be a /%s/<project>/<repo> path", ref, nativeCloneForge)
+	}
 	project, repoName, err := parseNativeCloneRef(ref)
 	if err != nil {
-		if !declaresForge(ref, nativeCloneForge) {
-			return "", fmt.Errorf("repo %q must be a /%s/<project>/<repo> path", ref, nativeCloneForge)
-		}
 		return "", fmt.Errorf("repo %q must be a /%s/<project>/<repo> path: %w", ref, nativeCloneForge, err)
 	}
 	projID, err := resolveProjectByName(ctx, c, project)
