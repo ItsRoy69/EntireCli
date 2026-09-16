@@ -76,12 +76,12 @@ Interactive prompts must support screen readers:
 // In cli package - use NewAccessibleForm()
 form := NewAccessibleForm(huh.NewGroup(...))
 
-// In strategy package - check isAccessibleMode()
-form := huh.NewForm(huh.NewGroup(...))
-if isAccessibleMode() {
-    form = form.WithAccessible(true)
-}
+// Outside cli (including strategy) - use cmd/entire/cli/uiform
+form := uiform.New(huh.NewGroup(...))
 ```
+
+Both helpers apply accessibility and theming centrally. Do not hand-roll
+`IsAccessibleMode` / `WithAccessible` wiring at call sites.
 
 ### Logging vs User Output
 
