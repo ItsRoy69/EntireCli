@@ -34,8 +34,8 @@ import (
 // Context is a single kubectl-style entry: which core to talk to, as
 // whom, and where the credentials are stored.
 type Context struct {
-	// Name is the user-facing identifier. Defaults to the issuer host on
-	// auto-creation; overridable via login --name.
+	// Name is the user-facing identifier: the issuer host, qualified
+	// with the handle when another identity already holds that host.
 	Name string `json:"name"`
 	// CoreURL is the JWT issuer URL — what STS exchanges hit. Set from
 	// the access token's signed iss claim, not the typed login URL.
