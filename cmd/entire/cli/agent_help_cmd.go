@@ -197,6 +197,17 @@ var agentHelpGuidance = map[string]string{
 		"`entire agent-help` first; there is probably a command for it. When you do\n" +
 		"need it, use this rather than hand-rolling curl — it attaches the right\n" +
 		"bearer and dials the right host for you.",
+
+	// The audience axis is per-command, so a command whose only write sits
+	// behind an opt-in flag has to be classified for the worst invocation it
+	// offers. That lands `checkpoint explain` on task-driven and would otherwise
+	// tell an agent to stay away from the drill-down that `checkpoint list` and
+	// `checkpoint search` exist to feed. This is where the distinction fits.
+	"checkpoint explain": "Reading a checkpoint is free: with no flags, or with --json, --full,\n" +
+		"--transcript or --raw-transcript, this only reads and is safe to run\n" +
+		"whenever you need the context. --generate is the exception — it writes a\n" +
+		"summary onto the checkpoint and spends tokens with the summary provider,\n" +
+		"so pass it only when the user asked for a summary.",
 }
 
 // agentHelpFactsFor classifies one command path, defaulting the unclassified
