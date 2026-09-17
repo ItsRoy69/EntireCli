@@ -281,7 +281,19 @@ func agentHelpAudienceNote(cmd *cobra.Command, facts agentHelpFacts, trailsEnabl
 	}
 	switch {
 	case len(readOnly) == 0 || len(writes) == 0:
-		// Leaf, or every classified child agrees with the group.
+		// Leaf, or the classified children agree WITH EACH OTHER — which is not
+		// the same as agreeing with the GROUP, and that gap is how a group starts
+		// lying. Delete a group's last dissenting child and this branch answers
+		// with the group's own audience while every child now says the opposite.
+		// That is precisely what removing `checkpoint policy` did: it left four
+		// read-only children under a group still classified task-driven.
+		//
+		// The group's own audience is still the right answer to return, because
+		// it is a claim about the whole group — including children that are
+		// hidden (`checkpoint resume` switches branches) or unclassified, neither
+		// of which is counted above. So the disagreement is caught at build time
+		// rather than papered over here; see
+		// TestAgentHelpClassification_GroupAudienceMatchesUnanimousChildren.
 		return agentHelpAudienceSlug(facts.audience)
 	case len(writes) <= len(readOnly):
 		return "read-only except: " + strings.Join(writes, ", ")

@@ -666,6 +666,54 @@ func TestAgentHelpClassification_ReadOnlyGroupsHaveNoWritingChildren(t *testing.
 	}
 }
 
+// agentHelpAudienceNote falls back to a group's OWN audience whenever its
+// classified children agree with each other. That fallback is correct — the
+// group's audience also covers children this listing never counts, the hidden
+// ones and the unclassified ones — but it means a group can silently begin
+// advertising an audience every one of its children contradicts, without anyone
+// editing the group's entry.
+//
+// That is not hypothetical: it is what deleting `checkpoint policy` did. policy
+// was the checkpoint group's only task-driven child, so removing it left four
+// read-only children under a group still classified task-driven, and the bare
+// listing rendered "checkpoint … task-driven" over a drill-down that said
+// read-only four times.
+//
+// Which side should move is a product judgment — lower the group, or classify a
+// child to match it — so this fails the build and makes a human choose instead
+// of picking for them.
+func TestAgentHelpClassification_GroupAudienceMatchesUnanimousChildren(t *testing.T) {
+	t.Parallel()
+
+	for _, sub := range agentHelpCommands(NewRootCmd(), true) {
+		facts, ok := agentHelpClassified(agentHelpPath(sub))
+		if !ok {
+			continue
+		}
+		var children []string
+		unanimous, agreed := true, agentHelpAudience(0)
+		for _, child := range agentHelpCommands(sub, true) {
+			cf, ok := agentHelpClassified(agentHelpPath(child))
+			if !ok {
+				continue
+			}
+			if len(children) == 0 {
+				agreed = cf.audience
+			} else if cf.audience != agreed {
+				unanimous = false
+			}
+			children = append(children, child.Name())
+		}
+		if len(children) == 0 || !unanimous || agreed == facts.audience {
+			continue
+		}
+		t.Errorf("group %q is classified %s, but every classified child (%s) is %s; "+
+			"the bare listing renders the group's own audience here, so one side has to move",
+			agentHelpPath(sub), agentHelpAudienceSlug(facts.audience),
+			strings.Join(children, ", "), agentHelpAudienceSlug(agreed))
+	}
+}
+
 // The bare listing shows a curated subset. An exhaustive listing answers "what
 // exists?", not the question an agent mid-task has, and it grew past the length
 // at which it gets read — so this pins that the listing stays short, that
