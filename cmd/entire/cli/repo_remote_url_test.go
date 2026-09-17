@@ -5,6 +5,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -180,4 +181,21 @@ func TestRepoRemoteURL_PickerKeepsStdoutClean(t *testing.T) {
 	// And the prompt really did render — on the terminal, not into the capture.
 	require.Contains(t, terminal.String(), "pick a remote")
 	require.Contains(t, terminal.String(), "aws-eu-west-1.entire.io")
+}
+
+// TestValidateEntireURLForPrinting_OffsetMatchesTheQuotedString calls the
+// validator directly with untrimmed input, which the CLI cannot currently
+// produce — resolveRepoRemoteURL trims before calling it. The function trims
+// for itself rather than relying on that, so the offset it reports and the
+// string it quotes have to agree without the caller's help.
+func TestValidateEntireURLForPrinting_OffsetMatchesTheQuotedString(t *testing.T) {
+	t.Parallel()
+
+	err := validateEntireURLForPrinting("   entire://host.entire.io/gh/o/r\nfoo   ")
+	require.Error(t, err)
+
+	// The quoted string is the trimmed one, and the reported offset indexes it.
+	const want = "entire://host.entire.io/gh/o/r"
+	require.Contains(t, err.Error(), `"`+want+`\nfoo"`)
+	require.Contains(t, err.Error(), "at offset "+strconv.Itoa(len(want)))
 }

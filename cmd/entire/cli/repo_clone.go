@@ -75,14 +75,20 @@ func isEntireCloneURL(ref string) bool {
 func validateEntireURLForPrinting(ref string) error {
 	name := strings.TrimSuffix(entireCloneURLScheme, "://")
 	trimmed := strings.TrimSpace(ref)
+	// Every message quotes trimmed, never ref: the offset below indexes trimmed,
+	// so quoting ref would report a position into a different string whenever
+	// the caller passed leading whitespace. resolveRepoRemoteURL happens to trim
+	// first, which is what keeps that from being reachable today — but this
+	// function trims for itself rather than trusting a caller to, so the two
+	// halves of the message have to agree on their own.
 	if i := strings.IndexFunc(trimmed, func(r rune) bool {
 		return unicode.IsSpace(r) || unicode.IsControl(r)
 	}); i >= 0 {
-		return fmt.Errorf("invalid %s URL %q: contains whitespace or a control character at offset %d", name, ref, i)
+		return fmt.Errorf("invalid %s URL %q: contains whitespace or a control character at offset %d", name, trimmed, i)
 	}
 	host, _, _ := strings.Cut(strings.TrimPrefix(trimmed, entireCloneURLScheme), "/")
 	if err := validateClusterHost(host); err != nil {
-		return fmt.Errorf("invalid %s URL %q: %w", name, ref, err)
+		return fmt.Errorf("invalid %s URL %q: %w", name, trimmed, err)
 	}
 	return nil
 }
