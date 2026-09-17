@@ -84,8 +84,8 @@ type agentHelpFacts struct {
 // side by side.
 //
 // Subcommands are classified wherever their audience differs from their
-// parent's. That is what lets a mixed group render as "read-only except: adopt,
-// attach, resume, stop" on ONE line: naming only the minority side keeps a group at one line however
+// parent's. That is what lets a mixed group render as "read-only except: explain"
+// on ONE line: naming only the minority side keeps a group at one line however
 // many subcommands it grows, where breaking each one out cost a line apiece.
 //
 // Unclassified commands fall back to agentHelpAudienceUserOwned, unlisted (see
@@ -100,8 +100,8 @@ var agentHelpClassification = map[string]agentHelpFacts{
 	"why":    {agentHelpAudienceReadOnly, true},
 	"search": {agentHelpAudienceReadOnly, true},
 
-	"checkpoint":         {agentHelpAudienceReadOnly, true},
-	"checkpoint explain": {agentHelpAudienceReadOnly, false},
+	"checkpoint":         {agentHelpAudienceTaskDriven, true},
+	"checkpoint explain": {agentHelpAudienceTaskDriven, false}, // --generate writes a summary
 	"checkpoint list":    {agentHelpAudienceReadOnly, false},
 	"checkpoint search":  {agentHelpAudienceReadOnly, false},
 	"checkpoint tokens":  {agentHelpAudienceReadOnly, false},
@@ -246,8 +246,8 @@ func agentHelpAudienceSlug(a agentHelpAudience) string {
 // agentHelpAudienceNote describes a command's audience in one clause.
 //
 // For a group whose classified subcommands disagree, it names only the SHORTER
-// side and leaves the rest implicit ("read-only except: adopt, attach, resume,
-// stop", or "read-only: show, list, … — others write"). Naming the minority is what keeps
+// side and leaves the rest implicit ("read-only except: explain", or
+// "read-only: show, list, … — others write"). Naming the minority is what keeps
 // a mixed group to a single line however many subcommands it gains; naming both
 // sides is what made an earlier revision of this listing grow a line per
 // subcommand until it stopped being readable.

@@ -187,10 +187,10 @@ The read-routing rules above are what make a hex-on-branch repo and a ULID-in-re
 
 Concretely, flipping the primary to git-refs means new checkpoints are ULIDs stored as per-checkpoint refs, while every checkpoint already written to the `v1` branch stays exactly where it is and keeps resolving through the branch fallback. This works because **every reader routes the same way — refs first (for both ID formats), branch fallback for the legacy format** — not just the CLI but also entire.io and entire-api. So a repo can move to refs-only on the remote without keeping the `v1` branch alive for any reader's benefit.
 
-A mixed fleet is fine and needs no special handling:
+A mixed fleet works, with one limitation:
 
 - A **modern** CLI (or the server) on git-refs primary reads everything: ULID/refs checkpoints directly, and older hex/`v1` checkpoints via the fallback.
-- An **old** CLI keeps writing hex checkpoints to the `v1` branch, and everyone modern still reads those. It simply **cannot read** newer ULID/refs checkpoints — which is the intended behavior: it fails closed rather than half-working.
+- An **old** CLI keeps writing hex checkpoints to the `v1` branch, and everyone modern still reads those. Reading ULID/refs checkpoints requires a CLI with git-refs support; an old CLI does not see them.
 
 This is why running `git-branch` as a *mirror* of git-refs is **not** part of the migration: it would dual-write every checkpoint into both backends to keep `v1` populated, but no reader needs that — read routing already covers both formats, and the "old client can't read the new format" case is a feature, not something to paper over.
 

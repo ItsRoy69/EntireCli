@@ -636,9 +636,10 @@ func TestAgentHelpClassification_CoversEveryAdvertisedCommand(t *testing.T) {
 }
 
 // A group's audience is a claim about all of its subcommands, so a read-only
-// group may not contain a subcommand that writes. session reads as read-only
-// from its Short help but is not (adopt/attach/resume/stop mutate session
-// state) — it was misclassified read-only in an earlier revision of this table.
+// group may not contain a subcommand that writes. checkpoint and session read
+// as read-only from their Short help but are not (`checkpoint explain --generate`
+// writes a summary; session carries adopt/attach/resume/stop) — both were misclassified
+// read-only in an earlier revision of this table.
 func TestAgentHelpClassification_ReadOnlyGroupsHaveNoWritingChildren(t *testing.T) {
 	t.Parallel()
 
@@ -655,8 +656,13 @@ func TestAgentHelpClassification_ReadOnlyGroupsHaveNoWritingChildren(t *testing.
 			}
 		}
 	}
-	if agentHelpFactsFor("session").audience == agentHelpAudienceReadOnly {
-		t.Error("session must not be classified read-only: adopt/attach/resume/stop mutate session state")
+	for name, why := range map[string]string{
+		"checkpoint": "`checkpoint explain --generate` writes a summary",
+		"session":    "adopt/attach/resume/stop mutate session state",
+	} {
+		if agentHelpFactsFor(name).audience == agentHelpAudienceReadOnly {
+			t.Errorf("%q must not be classified read-only: %s", name, why)
+		}
 	}
 }
 
@@ -673,6 +679,7 @@ func TestRenderAgentHelpTop_ListsCuratedSubsetWithInlineAudience(t *testing.T) {
 	// Listed commands appear with their audience.
 	for _, want := range []string{
 		"status", "trail", "checkpoint", "session", "why", "search",
+		"read-only except: explain",                     // checkpoint, one line
 		"read-only except: adopt, attach, resume, stop", // session, one line
 		"read-only: approvals, list, show, watch",       // trail: minority side named
 	} {
@@ -719,12 +726,12 @@ func TestRenderAgentHelpTop_ListsCuratedSubsetWithInlineAudience(t *testing.T) {
 func TestRenderAgentHelpCommand_SubcommandsCarryAudienceNote(t *testing.T) {
 	t.Parallel()
 
-	child := agentHelpFindChild(NewRootCmd(), "session")
+	child := agentHelpFindChild(NewRootCmd(), "checkpoint")
 	if child == nil {
-		t.Fatal("session command not found")
+		t.Fatal("checkpoint command not found")
 	}
 	out := renderAgentHelpCommand(child, agentHelpTestRepo, true)
-	if !strings.Contains(out, "read-only except: adopt, attach, resume, stop") {
+	if !strings.Contains(out, "read-only except: explain") {
 		t.Errorf("text drill-down must state which subcommands write:\n%s", out)
 	}
 }
@@ -763,15 +770,13 @@ func TestRenderAgentHelpJSON_CarriesAudienceWhereClassified(t *testing.T) {
 	}
 
 	drill := drillJSON(t, root, "checkpoint")
-	got := make(map[string]string, len(drill.Subcommands))
-	for _, sub := range drill.Subcommands {
-		got[sub.Name] = sub.Audience
+	want := map[string]string{
+		"list": "read-only", "explain": "task-driven", "search": "read-only",
+		"tokens": "read-only",
 	}
-	for name, want := range map[string]string{
-		"list": "read-only", "explain": "read-only", "search": "read-only", "tokens": "read-only",
-	} {
-		if got[name] != want {
-			t.Errorf("checkpoint %s audience = %q, want %q", name, got[name], want)
+	for _, sub := range drill.Subcommands {
+		if w, ok := want[sub.Name]; ok && sub.Audience != w {
+			t.Errorf("checkpoint %s audience = %q, want %q", sub.Name, sub.Audience, w)
 		}
 	}
 
