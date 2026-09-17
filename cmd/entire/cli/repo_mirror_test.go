@@ -2064,13 +2064,13 @@ func TestRepoMirrorRemove_ClusterFlag(t *testing.T) {
 	})
 
 	t.Run("omitted means the default cluster", func(t *testing.T) {
-		_, err := run("github.com/o/r")
+		_, err := run("/gh/o/r")
 		require.NoError(t, err)
 		require.Equal(t, []string{defaultClusterHost}, deleted)
 	})
 
 	t.Run("a second positional is refused before any request", func(t *testing.T) {
-		_, err := run("github.com/o/r", "eu.example")
+		_, err := run("/gh/o/r", "eu.example")
 		require.ErrorContains(t, err, "accepts 1 arg(s)")
 		require.Empty(t, deleted)
 	})
@@ -2112,13 +2112,13 @@ func TestRepoAccessList_ClusterFlag(t *testing.T) {
 	})
 
 	t.Run("omitted means the default cluster", func(t *testing.T) {
-		_, err := run("github.com/o/r")
+		_, err := run("/gh/o/r")
 		require.NoError(t, err)
 		require.Equal(t, []string{defaultClusterHost}, listed)
 	})
 
 	t.Run("a second positional is refused before any request", func(t *testing.T) {
-		_, err := run("github.com/o/r", "eu.example")
+		_, err := run("/gh/o/r", "eu.example")
 		require.ErrorContains(t, err, "accepts 1 arg(s)")
 		require.Empty(t, listed)
 	})

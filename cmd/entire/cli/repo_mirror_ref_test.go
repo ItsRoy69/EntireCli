@@ -10,13 +10,23 @@ import (
 
 func TestParseGitHubMirrorRepoRef(t *testing.T) {
 	t.Parallel()
-	for _, ref := range []string{"/gh/Acme/Widget.git", "gh/acme/widget", "https://github.com/acme/widget.git", "git@github.com:acme/widget.git", "github.com/acme/widget"} {
+	for _, ref := range []string{"/gh/Acme/Widget.git", "gh/acme/widget"} {
 		t.Run(ref, func(t *testing.T) {
 			t.Parallel()
 			owner, repo, err := parseGitHubMirrorRepoRef(ref)
 			require.NoError(t, err)
 			require.Equal(t, "acme", owner)
 			require.Equal(t, "widget", repo)
+		})
+	}
+	// A repository is named /<forge>/<a>/<b> and no other way. A GitHub URL is
+	// unambiguous about its forge but is still a second spelling, so it is
+	// refused and answered with the ref it should have been.
+	for _, ref := range []string{"https://github.com/acme/widget.git", "git@github.com:acme/widget.git", "github.com/acme/widget"} {
+		t.Run(ref, func(t *testing.T) {
+			t.Parallel()
+			_, _, err := parseGitHubMirrorRepoRef(ref)
+			require.ErrorContains(t, err, "pass GitHub repositories as /gh/acme/widget")
 		})
 	}
 	for _, ref := range []string{"acme/widget", "/gh/acme/..", "/et/project/..", "https://gitlab.com/acme/widget"} {
