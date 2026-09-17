@@ -142,17 +142,24 @@ func (s *ManualCommitStrategy) prePush(ctx context.Context, remote string, prote
 			// "never"). Push regex-only (8-layer) content as-is.
 			logging.Info(ctx, "OPF skipped for this push (user choice or settings)")
 		case OPFRun:
-			_, opfSpan := perf.Start(ctx, "opf_pre_push_rewrite")
+			// The open is its own span: opf_pre_push_rewrite names the rewrite
+			// and nothing else, so its timings stay comparable with every trace
+			// recorded while the repository was opened further up this function.
+			// The open is not free — on a reftable repo gitrepo routes reference
+			// reads back through the git CLI.
+			_, openSpan := perf.Start(ctx, "open_repository")
 			repo, repoErr := OpenRepository(ctx)
 			if repoErr != nil {
-				opfSpan.RecordError(repoErr)
-				opfSpan.End()
+				openSpan.RecordError(repoErr)
+				openSpan.End()
 				logging.Warn(ctx, "OPF pre-push: failed to open repo; aborting push",
 					slog.String("error", repoErr.Error()),
 				)
 				return repoErr
 			}
+			openSpan.End()
 			defer repo.Close()
+			_, opfSpan := perf.Start(ctx, "opf_pre_push_rewrite")
 			if _, rewriteErr := RewriteUnpushedV1WithOPF(ctx, repo, ps.pushTarget()); rewriteErr != nil {
 				opfSpan.RecordError(rewriteErr)
 				opfSpan.End()
