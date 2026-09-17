@@ -413,10 +413,10 @@ func newRepoCloneCmd() *cobra.Command {
 }
 
 // resolveRepoRemoteURL shares ref parsing, cluster routing, and URL validation
-// between clone and remote-url. Full URLs pass through without a lookup.
+// between clone and `remote url`. Full URLs pass through without a lookup.
 //
 // It serves two verbs, so its messages name neither: `repo clone` execs the
-// result while `repo remote-url` prints it for `git remote add`, and a user who
+// result while `repo remote url` prints it for `git remote add`, and a user who
 // asked for a URL should not be told about cloning. The per-verb wording that
 // does exist lives in the placementPicker.
 //
@@ -639,7 +639,7 @@ type placementPromptTerminal struct {
 
 // openPlacementPromptTerminal is a var so tests can drive the interactive path
 // without a real terminal. The picker's output routing is the whole contract
-// behind `repo remote-url`'s shell substitution and is otherwise unreachable
+// behind `repo remote url`'s shell substitution and is otherwise unreachable
 // under go test, where CanPromptInteractively() is false.
 var openPlacementPromptTerminal = func() (placementPromptTerminal, error) {
 	tty, err := interactive.OpenPromptTTY()
@@ -695,7 +695,7 @@ func selectPlacement(cmd *cobra.Command, placements []coreapi.ResolvedPlacement,
 
 	// The answer is read from the terminal, so the question has to be visible
 	// there. Neither of the command's own streams is guaranteed to be one:
-	// `repo remote-url` exists to have its stdout captured (`git remote add
+	// `repo remote url` exists to have its stdout captured (`git remote add
 	// entire "$(...)"`), and stderr is redirected often enough
 	// (`repo clone /gh/o/r 2>log`) that picking either unconditionally just
 	// moves which redirect breaks the prompt. Bubble Tea makes that failure

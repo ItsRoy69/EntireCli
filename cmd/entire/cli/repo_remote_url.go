@@ -9,7 +9,7 @@ import (
 func newRepoRemoteURLCmd() *cobra.Command {
 	var cluster string
 	cmd := &cobra.Command{
-		Use:   "remote-url <repo>",
+		Use:   "url <repo>",
 		Short: "Print an Entire repository's git remote URL",
 		Long: "Resolve an Entire-native /et/<project>/<repo> ref or a GitHub mirror " +
 			"/gh/<owner>/<repo> ref to its entire:// URL. A full entire:// URL is " +
@@ -21,9 +21,9 @@ func newRepoRemoteURLCmd() *cobra.Command {
 			"entire:// URL, which already names its cluster. " +
 			"For mirrors on multiple clusters, prompts for a placement interactively; " +
 			"pass --cluster to choose non-interactively.",
-		Example: "  entire repo remote-url /et/project/example\n" +
-			"  git remote add entire \"$(entire repo remote-url /et/project/example)\"\n" +
-			"  entire repo remote-url /gh/entirehq/entire-api --cluster aws-us-east-2.entire.io",
+		Example: "  entire repo remote url /et/project/example\n" +
+			"  git remote add entire \"$(entire repo remote url /et/project/example)\"\n" +
+			"  entire repo remote url /gh/entirehq/entire-api --cluster aws-us-east-2.entire.io",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Set inside RunE, as repo clone does, so cobra still prints usage
@@ -47,7 +47,7 @@ func newRepoRemoteURLCmd() *cobra.Command {
 	return cmd
 }
 
-// remoteURLPlacementPicker is `repo remote-url`'s wording for selectPlacement.
+// remoteURLPlacementPicker is `repo remote url`'s wording for selectPlacement.
 // See clonePlacementPicker for why a verb supplies a value rather than its own
 // selection function.
 func remoteURLPlacementPicker() placementPicker {

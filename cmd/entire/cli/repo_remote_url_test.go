@@ -76,7 +76,7 @@ func TestRepoRemoteURL_Native(t *testing.T) {
 			var out, errOut bytes.Buffer
 			cmd.SetOut(&out)
 			cmd.SetErr(&errOut)
-			cmd.SetArgs([]string{"remote-url", "/et/paul/dogbark.git"})
+			cmd.SetArgs([]string{"remote", "url", "/et/paul/dogbark.git"})
 			err := cmd.ExecuteContext(t.Context())
 			if tc.wantErr != "" {
 				require.ErrorContains(t, err, tc.wantErr)
@@ -138,7 +138,7 @@ func TestRepoRemoteURL_Mirror(t *testing.T) {
 
 // TestRepoRemoteURL_PickerKeepsStdoutClean is the regression test for the
 // command's one hard contract: `git remote add entire "$(entire repo
-// remote-url …)"` must capture the URL and nothing else, even when the mirror
+// remote url …)"` must capture the URL and nothing else, even when the mirror
 // is on several clusters and the picker runs.
 //
 // Without a terminal seam this path is untestable — CanPromptInteractively()

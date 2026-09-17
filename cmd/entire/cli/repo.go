@@ -17,9 +17,8 @@ import (
 // repository lifecycle (create, list within a project, view, edit, delete),
 // the `mirror`, `remote`, `access`, `visibility`, `protection` and `grant`
 // subtrees, plus the `clone` convenience that resolves a mirror and shells
-// out to `git clone` and the `remote-url` convenience that resolves the same
-// refs and prints the URL instead. Other git content operations (log, diff, …)
-// remain intentionally out of scope here.
+// out to `git clone`. Other git content operations (log, diff, …) remain
+// intentionally out of scope here.
 func newRepoCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   cmdRepo,
@@ -32,7 +31,6 @@ func newRepoCmd() *cobra.Command {
 	cmd.AddCommand(newRepoEditCmd())
 	cmd.AddCommand(newRepoDeleteCmd())
 	cmd.AddCommand(newRepoCloneCmd())
-	cmd.AddCommand(newRepoRemoteURLCmd())
 	cmd.AddCommand(newRepoMirrorCmd())
 	cmd.AddCommand(newRepoRemoteCmd())
 	cmd.AddCommand(newRepoAccessCmd())
