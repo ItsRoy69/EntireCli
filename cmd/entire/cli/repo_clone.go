@@ -3,10 +3,12 @@ package cli
 import (
 	"context"
 	"fmt"
+	"io"
 	"os/exec"
 	"regexp"
 	"sort"
 	"strings"
+	"unicode"
 
 	"charm.land/huh/v2"
 	"github.com/spf13/cobra"
@@ -42,8 +44,47 @@ const entireCloneURLScheme = "entire://"
 
 // isEntireCloneURL reports whether ref is a full entire:// clone URL (vs. the
 // `/gh/<owner>/<repo>` shorthand that needs a mirror lookup).
+//
+// It is a prefix test only — it answers "which branch of the ref grammar is
+// this", not "is this well-formed". `repo clone` wants exactly that, since it
+// forwards the string to git and lets git complain. A caller that prints the
+// URL wants validateEntireURLForPrinting as well.
 func isEntireCloneURL(ref string) bool {
 	return strings.HasPrefix(strings.TrimSpace(ref), entireCloneURLScheme)
+}
+
+// validateEntireURLForPrinting checks a full entire:// URL for callers that
+// PRINT it instead of handing it to git.
+//
+// `repo clone` deliberately skips this (see resolveRepoRemoteURL): a bad URL
+// there makes `git clone` fail immediately, in front of the user who typed it.
+// A printed URL has no such backstop — it is pasted into `git remote add` and
+// surfaces as a broken remote later, far from the command that produced it.
+//
+// Two checks, for the two ways a passthrough went wrong:
+//
+//   - No interior whitespace or control characters. The contract is one URL
+//     and one newline on stdout, so an embedded newline does not produce a bad
+//     URL, it produces two lines — and `$(…)` hands both to `git remote add`.
+//   - A valid host, via the same guard the synthesized paths use. `entire://`
+//     alone used to print and exit 0.
+//
+// Everything after the host is left alone: the repo path is the server's to
+// interpret, and git-remote-entire reports a bad one against a remote that at
+// least resolves.
+func validateEntireURLForPrinting(ref string) error {
+	name := strings.TrimSuffix(entireCloneURLScheme, "://")
+	trimmed := strings.TrimSpace(ref)
+	if i := strings.IndexFunc(trimmed, func(r rune) bool {
+		return unicode.IsSpace(r) || unicode.IsControl(r)
+	}); i >= 0 {
+		return fmt.Errorf("invalid %s URL %q: contains whitespace or a control character at offset %d", name, ref, i)
+	}
+	host, _, _ := strings.Cut(strings.TrimPrefix(trimmed, entireCloneURLScheme), "/")
+	if err := validateClusterHost(host); err != nil {
+		return fmt.Errorf("invalid %s URL %q: %w", name, ref, err)
+	}
+	return nil
 }
 
 // mirrorCloneURL synthesizes the entire:// clone URL for a GitHub mirror from
@@ -327,7 +368,9 @@ func newRepoCloneCmd() *cobra.Command {
 		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cmd.SilenceUsage = true
-			cloneURL, err := resolveRepoRemoteURL(cmd, args[0], cluster, selectCloneTarget)
+			// passthroughNeedsHost is false: an entire:// URL typed here goes
+			// straight to `git clone`, which reports a bad one itself.
+			cloneURL, err := resolveRepoRemoteURL(cmd, args[0], cluster, clonePlacementPicker(), false)
 			if err != nil {
 				return err
 			}
@@ -344,32 +387,52 @@ func newRepoCloneCmd() *cobra.Command {
 
 // resolveRepoRemoteURL shares ref parsing, cluster routing, and URL validation
 // between clone and remote-url. Full URLs pass through without a lookup.
-func resolveRepoRemoteURL(cmd *cobra.Command, ref, cluster string, pick func(*cobra.Command, []coreapi.ResolvedPlacement, string) (coreapi.ResolvedPlacement, error)) (string, error) {
+//
+// It serves two verbs, so its messages name neither: `repo clone` execs the
+// result while `repo remote-url` prints it for `git remote add`, and a user who
+// asked for a URL should not be told about cloning. The per-verb wording that
+// does exist lives in the placementPicker.
+//
+// passthroughNeedsHost asks for the entire:// passthrough to be validated. It
+// is false for clone (see the branch below) and true for callers that print the
+// URL rather than handing it to git.
+func resolveRepoRemoteURL(cmd *cobra.Command, ref, cluster string, picker placementPicker, passthroughNeedsHost bool) (string, error) {
 	// Trim once up front so the entire:// detection and the value forwarded
 	// to git clone agree (the shorthand path trims inside parseMirrorCloneRef).
 	ref = strings.TrimSpace(ref)
 
-	// A full entire:// clone URL already embeds the cluster host (it's what
-	// --cluster would otherwise resolve to), so pass it verbatim to git clone
-	// — no mirror lookup or cluster resolution. --cluster is irrelevant here.
+	// A full entire:// URL already embeds the cluster host (it's what --cluster
+	// would otherwise resolve to), so it needs no mirror lookup or cluster
+	// resolution and --cluster is irrelevant here.
 	//
-	// Deliberately NOT run through validateClusterHost: this is a raw URL the
-	// user typed, forwarded to `git clone` exactly as given (the whole point
-	// of this branch), so it's equivalent to running `git clone entire://…`
-	// directly. The validateClusterHost guard applies on the shorthand path
+	// For `repo clone` it is deliberately NOT run through validateClusterHost:
+	// it is a raw URL the user typed, forwarded to `git clone` exactly as given
+	// (the whole point of that branch), so it's equivalent to running
+	// `git clone entire://…` directly. The guard applies on the shorthand path
 	// where we *synthesize* the URL from a --cluster flag or an API-supplied
 	// host — values that flow into the STS audience under our own construction.
+	//
+	// A caller that PRINTS the URL gets the guard, because that argument does
+	// not reach it: the value is pasted into `git remote add` / git config
+	// rather than exec'd, so a malformed one is written to .git/config and
+	// fails later, far from the command that produced it. `entire://` alone
+	// used to print and exit 0.
 	if isEntireCloneURL(ref) {
+		if passthroughNeedsHost {
+			if err := validateEntireURLForPrinting(ref); err != nil {
+				return "", err
+			}
+		}
 		return ref, nil
 	}
 
 	// Native ref: resolve the repo's home cluster via the active-context
-	// control plane and clone from there. A native repo lives on exactly
-	// one home cluster, so --cluster has nothing to choose between.
+	// control plane. A native repo lives on exactly one home cluster, so
+	// --cluster has nothing to choose between.
 	project, repoName, nativeErr := parseNativeCloneRef(ref)
 	if nativeErr == nil {
 		if cluster != "" {
-			return "", fmt.Errorf("--cluster applies to /gh/ mirror refs; %s/%s is cloned from its home cluster", project, repoName)
+			return "", fmt.Errorf("--cluster applies to /gh/ mirror refs; %s/%s resolves to its home cluster", project, repoName)
 		}
 		var cloneURL string
 		if err := runCore(cmd, func(ctx context.Context, c *coreapi.Client) error {
@@ -426,7 +489,7 @@ func resolveRepoRemoteURL(cmd *cobra.Command, ref, cluster string, pick func(*co
 		return "", fmt.Errorf("no mirror found for /gh/%s/%s; run 'entire repo mirror create github.com/%s/%s' to onboard it", owner, repo, owner, repo)
 	}
 
-	chosen, err := pick(cmd, placements, cluster)
+	chosen, err := selectPlacement(cmd, placements, cluster, picker)
 	if err != nil {
 		return "", err
 	}
@@ -524,14 +587,39 @@ type placementPicker struct {
 
 const clusterSelectorFlag = "--cluster"
 
-// selectCloneTarget resolves which mirror placement to clone from, with the
-// clone verb's wording. See selectPlacement for the selection rules.
-func selectCloneTarget(cmd *cobra.Command, placements []coreapi.ResolvedPlacement, clusterFlag string) (coreapi.ResolvedPlacement, error) {
-	return selectPlacement(cmd, placements, clusterFlag, placementPicker{
+// clonePlacementPicker is `repo clone`'s wording for selectPlacement. A verb
+// supplies a placementPicker value rather than its own selection function:
+// the struct already parameterises everything that differs between verbs, so a
+// per-verb wrapper would be an identical function body around three strings.
+func clonePlacementPicker() placementPicker {
+	return placementPicker{
 		selector: clusterSelectorFlag,
 		title:    "This repo is mirrored on more than one cluster — pick one to clone from",
 		action:   "Clone",
-	})
+	}
+}
+
+// placementPromptTerminal is the controlling terminal the placement picker
+// falls back to when the command's stderr is not one. Same shape as
+// pluginPromptTerminal: in is the terminal rather than os.Stdin, out is its
+// output handle, close releases both. All three are nil in tests that replace
+// the opener.
+type placementPromptTerminal struct {
+	in    io.Reader
+	out   io.Writer
+	close func() error
+}
+
+// openPlacementPromptTerminal is a var so tests can drive the interactive path
+// without a real terminal. The picker's output routing is the whole contract
+// behind `repo remote-url`'s shell substitution and is otherwise unreachable
+// under go test, where CanPromptInteractively() is false.
+var openPlacementPromptTerminal = func() (placementPromptTerminal, error) {
+	tty, err := interactive.OpenPromptTTY()
+	if err != nil {
+		return placementPromptTerminal{}, fmt.Errorf("open placement picker terminal: %w", err)
+	}
+	return placementPromptTerminal{in: tty.Input(), out: tty.Output(), close: tty.Close}, nil
 }
 
 // selectPlacement resolves which mirror placement a verb should act on. With one
@@ -577,6 +665,23 @@ func selectPlacement(cmd *cobra.Command, placements []coreapi.ResolvedPlacement,
 	for i, h := range hosts {
 		options[i] = huh.NewOption(mirrorCellLabel(byHost[h]), h)
 	}
+
+	// The answer is read from the terminal, so the question has to be visible
+	// there. Neither of the command's own streams is guaranteed to be one:
+	// `repo remote-url` exists to have its stdout captured (`git remote add
+	// entire "$(...)"`), and stderr is redirected often enough
+	// (`repo clone /gh/o/r 2>log`) that picking either unconditionally just
+	// moves which redirect breaks the prompt. Bubble Tea makes that failure
+	// silent rather than loud — it sets ttyOutput only when the writer is a
+	// terminal and then cannot query the window size, so it renders into a 0x0
+	// viewport while stdin is still in raw mode: an invisible prompt on an
+	// apparently hung command. Its /dev/tty fallback covers input only.
+	//
+	// So prefer stderr when it IS a terminal (keeps the escape sequences off a
+	// captured stdout) and fall back to the controlling terminal when it is
+	// not. Same shape as runPluginConfirm; interactive.OpenPromptTTY rather
+	// than tea.OpenTTY because its Close releases the read Bubble Tea leaves
+	// pending, which otherwise costs a second keypress on Windows.
 	var selected string
 	form := NewAccessibleForm(
 		huh.NewGroup(
@@ -586,7 +691,25 @@ func selectPlacement(cmd *cobra.Command, placements []coreapi.ResolvedPlacement,
 				Value(&selected),
 		),
 	)
-	form.WithOutput(cmd.ErrOrStderr())
+	if interactive.IsTerminalWriter(cmd.ErrOrStderr()) {
+		form = form.WithOutput(cmd.ErrOrStderr())
+	} else {
+		term, err := openPlacementPromptTerminal()
+		if err != nil {
+			return coreapi.ResolvedPlacement{}, err
+		}
+		if term.close != nil {
+			defer func() {
+				_ = term.close() //nolint:errcheck // best-effort cleanup after terminal interaction, as plugin_confirm.go does
+			}()
+		}
+		if term.out != nil {
+			form = form.WithOutput(term.out)
+		}
+		if term.in != nil {
+			form = form.WithInput(term.in)
+		}
+	}
 	if err := form.RunWithContext(cmd.Context()); err != nil {
 		// handleFormCancellation prints "<action> cancelled." and returns nil for a
 		// Ctrl+C / cancelled-context abort. Surface that as a SilentError so the

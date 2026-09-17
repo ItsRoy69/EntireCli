@@ -81,8 +81,14 @@ the commands are always runnable in every build.
 - `org`: control-plane organization management — `create`, `list`, `get`, `delete`
 - `project`: control-plane project management — `create`, `list`, `get`, `delete`
 - `repo`: control-plane repository lifecycle — `create`, `list`, `get`, `delete`,
-  `clone`, plus the `mirror`, `visibility` and `protection` subtrees. Git
-  content operations (log, diff, …) are intentionally out of scope.
+  `clone`, `remote-url`, plus the `mirror`, `visibility` and `protection`
+  subtrees. Git content operations (log, diff, …) are intentionally out of
+  scope. `remote-url` is `clone` without the clone: it resolves the same three
+  ref shapes through the same `resolveRepoRemoteURL` and prints the
+  `entire://` URL to stdout for `git remote add entire "$(…)"`, so the two
+  always accept the same refs. It deliberately does **not** take the
+  `resolveRepoRef` grammar the rest of the group shares (no ULID, no
+  `--project`) — a URL producer matches its sibling `clone`, not `get`.
   `protection` (`list`, `add [--server-side-merge-only]`, `remove`) edits a
   native repo's branch-protection rules through core's
   `/repos/{repoId}/branch-protection` resource: `add` and `remove` are one
@@ -97,8 +103,13 @@ the commands are always runnable in every build.
   (local git config only — it creates nothing server-side). Interactively it
   picks among the repo's placements and asks whether to replace the remote
   (preserving the old URL under `--upstream`) or add a separate one;
-  non-interactively it repoints `--remote` directly. Both `use` and `clone`
-  choose a placement through the shared `selectPlacement` picker. `clone`
+  non-interactively it repoints `--remote` directly. `use`, `clone` and
+  `remote-url` all choose a placement through the shared `selectPlacement`
+  picker, each passing its own `placementPicker` wording. The picker renders on
+  stderr when that is a terminal and on the controlling terminal otherwise
+  (`openPlacementPromptTerminal`), because Bubble Tea fails *silently* on a
+  redirected writer — no window size, a 0x0 viewport, and stdin still in raw
+  mode — and `remote-url` exists to have its stdout captured. `clone`
   accepts a native `/et/<project>/<repo>` ref, a mirror `/gh/<owner>/<repo>`
   ref, or a full `entire://` URL passed through verbatim. **Every ref names its
   forge**: the leading token alone decides which grammar is tried, and the bare
