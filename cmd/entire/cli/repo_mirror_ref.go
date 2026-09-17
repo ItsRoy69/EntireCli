@@ -15,10 +15,13 @@ const mirrorRepoRefHelp = "Repository references name their forge: /gh/<owner>/<
 // `repo clone` makes in invalidCloneRefError.
 func parseGitHubMirrorRepoRef(ref string) (owner, repo string, err error) {
 	ref = strings.TrimSpace(ref)
+	// Declaring the native forge is the whole answer, so the ref is never
+	// parsed: these verbs refuse every /et/ ref, which makes how the project
+	// and repo are spelled irrelevant. Validating first gave one answer for a
+	// well-formed ref and a name-rule lecture for a malformed one, sending the
+	// reader to fix a name that would be refused either way. The name is worth
+	// checking in `repo grant`, which can act on it.
 	if declaresForge(ref, nativeCloneForge) {
-		if _, _, err := parseNativeCloneRef(ref); err != nil {
-			return "", "", fmt.Errorf("invalid <repo> %q: %w", ref, err)
-		}
 		return "", "", fmt.Errorf("this operation does not support Entire repository %q; it currently supports GitHub mirrors only", ref)
 	}
 	if declaresForge(ref, mirrorCloneForge) {

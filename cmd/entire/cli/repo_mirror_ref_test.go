@@ -29,7 +29,7 @@ func TestParseGitHubMirrorRepoRef(t *testing.T) {
 			require.ErrorContains(t, err, "pass GitHub repositories as /gh/acme/widget")
 		})
 	}
-	for _, ref := range []string{"acme/widget", "/gh/acme/..", "/et/project/..", "https://gitlab.com/acme/widget"} {
+	for _, ref := range []string{"acme/widget", "/gh/acme/..", "https://gitlab.com/acme/widget"} {
 		t.Run(ref, func(t *testing.T) {
 			t.Parallel()
 			_, _, err := parseGitHubMirrorRepoRef(ref)
@@ -87,11 +87,29 @@ func TestBareRefSuggestions_OnlyOffersRefsTheCallerAccepts(t *testing.T) {
 	}
 }
 
-// TestParseGitHubMirrorRepoRef_NativeRefIsRefused pins that a native ref is
-// refused by name, so callers can add their own pointer to the verb that does
-// serve Entire repositories.
+// TestParseGitHubMirrorRepoRef_NativeRefIsRefused pins that declaring the
+// native forge is the whole answer: every /et/ ref gets the same refusal, so
+// callers can attach their own pointer to the verb that does serve Entire
+// repositories.
+//
+// The spelling of the project and repo must not change the answer. These verbs
+// refuse the ref either way, so reporting a name rule would send the reader to
+// fix something that would be refused again.
 func TestParseGitHubMirrorRepoRef_NativeRefIsRefused(t *testing.T) {
 	t.Parallel()
-	_, _, err := parseGitHubMirrorRepoRef("/et/my-project/my-repo")
-	require.ErrorContains(t, err, "does not support Entire repository")
+	for _, ref := range []string{
+		"/et/my-project/my-repo", // well-formed
+		"/et/p/r",                // project too short for the server's rules
+		"/et/project/..",         // repo is not a name at all
+		"/et/foo",                // not even two segments
+		"et/my-project/my-repo",  // leading slash is optional
+	} {
+		t.Run(ref, func(t *testing.T) {
+			t.Parallel()
+			_, _, err := parseGitHubMirrorRepoRef(ref)
+			require.ErrorContains(t, err, "does not support Entire repository")
+			require.NotContains(t, err.Error(), "is not a name the server accepts",
+				"a verb that refuses every native ref must not teach the name rule")
+		})
+	}
 }
