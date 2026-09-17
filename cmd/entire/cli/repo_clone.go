@@ -691,9 +691,12 @@ func selectPlacement(cmd *cobra.Command, placements []coreapi.ResolvedPlacement,
 				Value(&selected),
 		),
 	)
-	if interactive.IsTerminalWriter(cmd.ErrOrStderr()) {
-		form = form.WithOutput(cmd.ErrOrStderr())
-	} else {
+	// render is where the prompt goes AND where anything explaining its outcome
+	// goes. They have to be the same writer: in the fallback branch stderr is by
+	// definition not visible, so a cancellation message sent there would explain
+	// a prompt the user watched disappear, into a stream they are not reading.
+	render := cmd.ErrOrStderr()
+	if !interactive.IsTerminalWriter(render) {
 		term, err := openPlacementPromptTerminal()
 		if err != nil {
 			return coreapi.ResolvedPlacement{}, err
@@ -704,19 +707,20 @@ func selectPlacement(cmd *cobra.Command, placements []coreapi.ResolvedPlacement,
 			}()
 		}
 		if term.out != nil {
-			form = form.WithOutput(term.out)
+			render = term.out
 		}
 		if term.in != nil {
 			form = form.WithInput(term.in)
 		}
 	}
+	form = form.WithOutput(render)
 	if err := form.RunWithContext(cmd.Context()); err != nil {
 		// handleFormCancellation prints "<action> cancelled." and returns nil for a
 		// Ctrl+C / cancelled-context abort. Surface that as a SilentError so the
 		// caller stops instead of falling through to act on a zero-value target
 		// (the `entire:///gh/...` empty-host bug) without main.go reprinting the
 		// message handleFormCancellation already wrote; a real form error propagates.
-		if cerr := handleFormCancellation(cmd.ErrOrStderr(), p.action, err); cerr != nil {
+		if cerr := handleFormCancellation(render, p.action, err); cerr != nil {
 			return coreapi.ResolvedPlacement{}, cerr
 		}
 		return coreapi.ResolvedPlacement{}, NewSilentError(fmt.Errorf("%s cancelled", strings.ToLower(p.action)))
