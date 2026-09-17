@@ -293,7 +293,22 @@ func readNoLock(configDir string) (*File, error) {
 	if err := json.Unmarshal(data, &f); err != nil {
 		return nil, fmt.Errorf("parse contexts file: %w", err)
 	}
+	f.dropUnaddressable()
 	return &f, nil
+}
+
+// dropUnaddressable removes nil and nameless entries.
+//
+// Entire never writes either (Upsert refuses an empty name), so they come
+// from a hand edit or a truncated file. Every operation addresses a context
+// by name, so such an entry can never be selected, removed, or logged out
+// of: it would sit in the file forever, counted as a login. Dropping it on
+// load means the next write persists the clean list. current_context is
+// left alone: Active already treats a name with no entry as unset.
+func (f *File) dropUnaddressable() {
+	f.Contexts = slices.DeleteFunc(f.Contexts, func(c *Context) bool {
+		return c == nil || c.Name == ""
+	})
 }
 
 func writeNoLock(configDir string, f *File) error {

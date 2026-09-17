@@ -371,3 +371,36 @@ func TestLoad_AcceptsTheResolversOwnFallback(t *testing.T) {
 		t.Fatalf("Load(%q) = %v, want the resolver's own fallback honored", dir, err)
 	}
 }
+
+// A hand-edited or truncated contexts.json can hold null or nameless
+// entries. Nothing can address them by name, so Load drops them and the
+// next write persists the clean list; the real entry and current_context
+// survive untouched.
+func TestLoad_DropsNilAndNamelessEntries(t *testing.T) {
+	dir := t.TempDir()
+	seed := &contexts.File{
+		CurrentContext: "real",
+		Contexts: []*contexts.Context{
+			nil,
+			{CoreURL: "https://nameless.example", Handle: "x"},
+			{Name: "real", CoreURL: "https://eu.example", Handle: "paul", KeychainService: "kc:real"},
+		},
+	}
+	if err := contexts.Save(dir, seed); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	got, err := contexts.Load(dir)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(got.Contexts) != 1 || got.Contexts[0].Name != "real" {
+		t.Fatalf("Contexts = %+v, want only the named entry", got.Contexts)
+	}
+	if got.CurrentContext != "real" {
+		t.Fatalf("CurrentContext = %q, want %q", got.CurrentContext, "real")
+	}
+	if got.Find("") != nil {
+		t.Fatal("Find(\"\") must not resolve after load")
+	}
+}
