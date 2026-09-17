@@ -107,7 +107,7 @@ func parseSortColumn(spec string, columns []column) (col column, desc bool, err 
 // and VISIBILITY come from every row; CLUSTERS and the placement STATUS are
 // onboarded-only; ACCESS is candidate-only. Sparse cells render as "-".
 // Per-placement detail (clone URLs, per-cluster status) lives one step down,
-// in `repo mirror get <owner/repo>` — a directory this size stays one row per
+// in `repo mirror get /gh/<owner>/<repo>` — a directory this size stays one row per
 // repo, not one per placement.
 var repoDirColumns = []column{colName, colClusters, colVisibility, colStatus, colAccess}
 
@@ -285,7 +285,7 @@ func buildRepoDir(entries []coreapi.RepoIndexEntry, hostBySlug map[string]string
 			if cand.Onboardable {
 				status = "available"
 			}
-			rows = append(rows, repoDirRow{Repo: name, Private: private, Status: status, Access: string(cand.Access)})
+			rows = append(rows, repoDirRow{Repo: mirrorRepoRef(name), Private: private, Status: status, Access: string(cand.Access)})
 			continue
 		}
 		owner, repo, _ := strings.Cut(name, "/")
@@ -310,7 +310,7 @@ func buildRepoDir(entries []coreapi.RepoIndexEntry, hostBySlug map[string]string
 		if len(placements) == 0 {
 			continue // native-only repo: not part of the mirror directory
 		}
-		rows = append(rows, repoDirRow{Repo: name, Private: private, Status: status, Placements: placements})
+		rows = append(rows, repoDirRow{Repo: mirrorRepoRef(name), Private: private, Status: status, Placements: placements})
 	}
 	return rows
 }
@@ -353,12 +353,27 @@ func sortRepoDir(rows []repoDirRow, spec string) error {
 	return nil
 }
 
+// mirrorRepoRef qualifies a bare <owner>/<repo> from the repos index with the
+// forge it belongs to, so a directory row prints the same shape every mirror
+// verb accepts. A value copied from the NAME column, or read out of --json, is
+// then a reference rather than something to prepend a forge to by hand.
+func mirrorRepoRef(ownerRepo string) string {
+	return "/" + mirrorCloneForge + "/" + ownerRepo
+}
+
+// mirrorRefOwner returns the owner segment of a forge-qualified directory name.
+func mirrorRefOwner(ref string) string {
+	owner, _, _ := strings.Cut(strings.TrimPrefix(trimRefPrefix(ref), mirrorCloneForge+"/"), "/")
+	return owner
+}
+
 // filterByName keeps items whose owner/repo name contains substr (case-
 // insensitive). The control plane already filters by owner/provider/cluster
 // server-side but not by name, so `repo mirror list --name` narrows that last
 // dimension client-side. nameOf returns the item's displayed identifier — the
-// callers pass the owner/repo form shown in the NAME column, so a value copied
-// from the table (e.g. acme/web) matches the row it came from. An empty substr
+// callers pass the form shown in the NAME column, so a value copied from the
+// table (e.g. /gh/acme/web) matches the row it came from, and so does the bare
+// acme/web it contains. An empty substr
 // returns items unchanged.
 func filterByName[T any](items []T, nameOf func(T) string, substr string) []T {
 	substr = strings.TrimSpace(substr)
@@ -673,8 +688,7 @@ func applyRepoDirLocal(f repoDirLocalFilters, rows []repoDirRow, hostBySlug map[
 	rows = filterByName(rows, func(r repoDirRow) string { return r.Repo }, f.name)
 	if f.owner != "" {
 		rows = slices.DeleteFunc(rows, func(r repoDirRow) bool {
-			o, _, _ := strings.Cut(r.Repo, "/")
-			return !strings.EqualFold(o, f.owner)
+			return !strings.EqualFold(mirrorRefOwner(r.Repo), f.owner)
 		})
 	}
 	if f.cluster != "" {
@@ -796,7 +810,7 @@ func runRepoMirrorList(cmd *cobra.Command, o repoMirrorListOpts) error {
 	// already).
 	hintDetail := func(err error) error {
 		if err == nil && listedAny && !jsonRequested(cmd) {
-			fmt.Fprintln(cmd.ErrOrStderr(), "\nPer-cluster detail and clone URLs: entire repo mirror get <owner/repo>")
+			fmt.Fprintln(cmd.ErrOrStderr(), "\nPer-cluster detail and clone URLs: entire repo mirror get /gh/<owner>/<repo>")
 		}
 		return err
 	}
@@ -925,7 +939,7 @@ func newRepoMirrorListCmd() *cobra.Command {
 			"(one row per repo, with the clusters it is mirrored on and the clone " +
 			"status) and GitHub repos you could onboard (access, availability). " +
 			"Sparse cells show '-'. Per-cluster detail and clone URLs: " +
-			"`entire repo mirror get <owner/repo>`.\n\n" +
+			"`entire repo mirror get /gh/<owner>/<repo>`.\n\n" +
 			"The first " + strconv.Itoa(coreListFetchBudget) + " entries are fetched by default, with a note on stderr " +
 			"when more exist. Filters and --sort apply to those fetched rows — add " +
 			"--all to work over the complete list, or --limit N for just the first N.\n\n" +
@@ -965,7 +979,7 @@ func newRepoMirrorListCmd() *cobra.Command {
 	// server-side implementation must leave the group.
 	cmd.Flags().StringVar(&cluster, "cluster", "", "Keep only repos mirrored on this cluster, by slug or public host (drops onboardable candidates)")
 	cmd.Flags().StringVar(&owner, "owner", "", "Filter by upstream owner login")
-	cmd.Flags().StringVar(&name, "name", "", "Filter by owner/repo substring, matching the NAME column (case-insensitive)")
+	cmd.Flags().StringVar(&name, "name", "", "Filter by substring of the NAME column, e.g. acme/web or /gh/acme (case-insensitive)")
 	cmd.Flags().StringVar(&status, "status", "", "Filter by exact STATUS (mirrors: ready/processing/failed/suspended, matching any of a repo's placements; candidates: available/owner-only)")
 	cmd.Flags().StringVar(&access, "access", "", "Filter by exact ACCESS (candidates only: read/write/admin)")
 	cmd.Flags().BoolVar(&private, "private", false, "Filter by visibility: --private for private only, --private=false for public only (omit for all)")
@@ -994,10 +1008,8 @@ func newRepoMirrorGetCmd() *cobra.Command {
 		Use:   "get <mirror>",
 		Short: "Show a repo's mirrors by owner/repo, or one mirror by ULID or clone URL",
 		Long: "Show a mirror, or every mirror of a repo. <mirror> is one of:\n\n" +
-			"  - /gh/<owner>/<repo>, the forge-qualified form the other mirror verbs\n" +
-			"    take; a bare <owner>/<repo>, as shown in the `mirror list` NAME\n" +
-			"    column, is accepted too — both show the\n" +
-			"    repo (visibility, access) and its mirror on every cluster, with\n" +
+			"  - /gh/<owner>/<repo>, as shown in the `mirror list` NAME column — shows\n" +
+			"    the repo (visibility, access) and its mirror on every cluster, with\n" +
 			"    per-cluster clone URL and status\n" +
 			"  - a mirror ULID\n" +
 			"  - an entire:// clone URL (entire://<cluster>/gh/<owner>/<repo>) — the form\n" +
@@ -1036,27 +1048,26 @@ func newRepoMirrorGetCmd() *cobra.Command {
 			// detail the list aggregates away (clone URL, per-cluster
 			// status). Like a ULID it carries no cluster coordinate, so it
 			// resolves on the active context's core.
-			// A forge-qualified ref is what every sibling verb takes, so it
-			// resolves here too: /gh/<owner>/<repo> is the same by-name
-			// lookup, and /et/... gets the subtree's own GitHub-only refusal
-			// rather than the clone-URL parser's puzzling one.
-			if declaresForge(ref, nativeCloneForge) || declaresForge(ref, mirrorCloneForge) {
-				owner, repo, ferr := parseGitHubMirrorRepoRef(ref)
-				if ferr != nil {
+			// A clone URL names its own cluster, so it is looked up on the
+			// core fronting that cluster. Recognised by its scheme so a
+			// malformed one keeps the clone-URL parser's reason instead of
+			// being reported as a bad repository reference.
+			if strings.HasPrefix(strings.ToLower(strings.TrimSpace(ref)), "entire:") {
+				clusterHost, _, _, _, err := parseMirrorCloneURL(ref)
+				if err != nil {
 					cmd.SilenceUsage = true
-					return ferr
+					return badMirrorRefErr(err)
 				}
-				return runRepoMirrorGetByName(cmd, owner+"/"+repo)
+				return runCoreObjectForCluster(cmd, clusterHost, columnHeaders(mirrorColumns), mirrorRow, show)
 			}
-			if isOwnerRepoRef(ref) {
-				return runRepoMirrorGetByName(cmd, ref)
-			}
-			clusterHost, _, _, _, err := parseMirrorCloneURL(ref)
+			// Everything else is a repository reference, in the one grammar
+			// the whole mirror subtree takes.
+			owner, repo, err := parseGitHubMirrorRepoRef(ref)
 			if err != nil {
 				cmd.SilenceUsage = true
-				return badMirrorRefErr(err)
+				return err
 			}
-			return runCoreObjectForCluster(cmd, clusterHost, columnHeaders(mirrorColumns), mirrorRow, show)
+			return runRepoMirrorGetByName(cmd, owner+"/"+repo)
 		},
 	}
 	addJSONFlag(cmd)
@@ -1111,7 +1122,7 @@ func mirrorRepoDetailRow(e coreapi.RepoIndexEntry, hostBySlug map[string]string)
 		if name == "" {
 			name = e.Name
 		}
-		return repoDirRow{Repo: name, Private: strings.EqualFold(e.Visibility, "private")}
+		return repoDirRow{Repo: mirrorRepoRef(name), Private: strings.EqualFold(e.Visibility, "private")}
 	}
 	row := rows[0]
 	slices.SortFunc(row.Placements, func(a, b repoDirPlacement) int {
@@ -1170,19 +1181,6 @@ func renderRepoDetail(w io.Writer, row repoDirRow) {
 		writeTableRow(&b, r, widths, plain, tableStyles{})
 	}
 	fmt.Fprint(w, b.String())
-}
-
-// isOwnerRepoRef reports whether ref is a bare <owner>/<repo> mirror
-// reference — the NAME cell of `mirror list`, passed verbatim to the /repos
-// exact-match filter. Anything carrying a scheme, extra path segments, or an
-// empty side is not this form (it falls through to clone-URL parsing, whose
-// error names the expected shapes).
-func isOwnerRepoRef(ref string) bool {
-	if strings.Contains(ref, "://") {
-		return false
-	}
-	owner, repo, found := strings.Cut(ref, "/")
-	return found && owner != "" && repo != "" && !strings.Contains(repo, "/")
 }
 
 // resolveMirrorRef turns a mirror reference into its ULID. A ULID passes
@@ -1264,7 +1262,7 @@ func noMirrorErr(ref string) error {
 // forms. Shared by the pre-dial parse in `mirror get` and resolveMirrorRef so
 // both boundaries report identically.
 func badMirrorRefErr(err error) error {
-	return fmt.Errorf("%w; pass <owner>/<repo>, a mirror ULID, or a clone URL (entire://<cluster>/gh/<owner>/<repo>)", err)
+	return fmt.Errorf("%w; pass /gh/<owner>/<repo>, a mirror ULID, or a clone URL (entire://<cluster>/gh/<owner>/<repo>)", err)
 }
 
 func newRepoMirrorRemoveCmd() *cobra.Command {

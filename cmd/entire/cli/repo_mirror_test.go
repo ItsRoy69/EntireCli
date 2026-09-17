@@ -455,7 +455,7 @@ func TestRepoMirrorList_Merged(t *testing.T) {
 		require.Contains(t, stdout, "alice/dotfiles")
 		require.Contains(t, stdout, "owner-only")
 		// The NAME cell is the handle into the detail view.
-		require.Contains(t, stderr, "entire repo mirror get <owner/repo>")
+		require.Contains(t, stderr, "entire repo mirror get /gh/<owner>/<repo>")
 	})
 
 	t.Run("a multi-cluster repo lists once, clusters joined in one cell", func(t *testing.T) {
@@ -919,7 +919,7 @@ func TestRepoMirrorList_FilterSort(t *testing.T) {
 	t.Run("--name applies to --json and keeps [] not null", func(t *testing.T) {
 		serveRepoList(t, repos(), clusters, false)
 		stdout, _ := runMirrorList(t, "--name", "cli", "--json")
-		require.Contains(t, stdout, `"repo": "acme/cli"`)
+		require.Contains(t, stdout, `"repo": "/gh/acme/cli"`, "--json carries the same ref the verbs accept")
 		require.NotContains(t, stdout, `"repo": "acme/web"`)
 
 		serveRepoList(t, repos(), clusters, false)
@@ -1272,7 +1272,7 @@ func TestRepoMirrorGet_Routing(t *testing.T) {
 		})
 		_, err := runGet(t, "not-a-url")
 		require.Error(t, err)
-		require.ErrorContains(t, err, "pass <owner>/<repo>, a mirror ULID, or a clone URL")
+		require.ErrorContains(t, err, "expected a forge-qualified repository reference")
 	})
 
 	// serveRepoDetail answers the two endpoints the owner/repo form uses: the
@@ -1308,7 +1308,7 @@ func TestRepoMirrorGet_Routing(t *testing.T) {
 		{Slug: "eu", PublicUrl: "https://eu-west-1.entire.io"},
 	}
 
-	t.Run("owner/repo renders the record view with a per-cluster table", func(t *testing.T) {
+	t.Run("/gh/owner/repo renders the record view with a per-cluster table", func(t *testing.T) {
 		// The drill-down from the grouped `mirror list` NAME cell: identity
 		// fields, then one row per cluster mirror with clone URL + status,
 		// deterministic (cluster-slug) order — the entry delivers eu-first.
@@ -1319,7 +1319,7 @@ func TestRepoMirrorGet_Routing(t *testing.T) {
 			}},
 		}, detailClusters)
 
-		out, err := runGet(t, "entirehq/entiredb")
+		out, err := runGet(t, "/gh/entirehq/entiredb")
 		require.NoError(t, err)
 		require.Equal(t, "entirehq/entiredb", *gotFilter, "the lookup must be the server-side exact-match filter")
 		requireOrder(t, out,
@@ -1331,12 +1331,12 @@ func TestRepoMirrorGet_Routing(t *testing.T) {
 		)
 	})
 
-	t.Run("owner/repo on a candidate shows access and availability, no table", func(t *testing.T) {
+	t.Run("/gh/owner/repo on a candidate shows access and availability, no table", func(t *testing.T) {
 		serveRepoDetail(t, []coreapi.RepoIndexEntry{
 			candidateEntry("entirehq/notyet", "private", coreapi.RepoCandidateAccessWrite, true),
 		}, detailClusters)
 
-		out, err := runGet(t, "entirehq/notyet")
+		out, err := runGet(t, "/gh/entirehq/notyet")
 		require.NoError(t, err)
 		requireOrder(t, out,
 			"Name:", "entirehq/notyet",
@@ -1347,49 +1347,37 @@ func TestRepoMirrorGet_Routing(t *testing.T) {
 		require.NotContains(t, out, "CLONE URL", "a candidate has no placements table")
 	})
 
-	t.Run("owner/repo --json emits the list's row shape, placements nested", func(t *testing.T) {
+	t.Run("/gh/owner/repo --json emits the list's row shape, placements nested", func(t *testing.T) {
 		serveRepoDetail(t, []coreapi.RepoIndexEntry{
 			{FullName: "entirehq/entiredb", Visibility: "private", Placements: []coreapi.RepoPlacement{
 				{ClusterSlug: "us", Status: coreapi.RepoPlacementStatusReady, Mirror: true},
 			}},
 		}, detailClusters)
 
-		out, err := runGet(t, "entirehq/entiredb", "--json")
+		out, err := runGet(t, "/gh/entirehq/entiredb", "--json")
 		require.NoError(t, err)
 		var row repoDirRow
 		require.NoError(t, json.Unmarshal([]byte(out), &row))
-		require.Equal(t, repoDirRow{Repo: "entirehq/entiredb", Private: true, Status: "ready", Placements: []repoDirPlacement{
+		require.Equal(t, repoDirRow{Repo: "/gh/entirehq/entiredb", Private: true, Status: "ready", Placements: []repoDirPlacement{
 			{Cluster: "us", Status: "ready", CloneURL: "entire://aws-us-east-2.entire.io/gh/entirehq/entiredb"},
 		}}, row)
 	})
 
-	t.Run("owner/repo with no matching repo is a friendly error", func(t *testing.T) {
+	t.Run("/gh/owner/repo with no matching repo is a friendly error", func(t *testing.T) {
 		serveRepoDetail(t, nil, detailClusters)
-		_, err := runGet(t, "entirehq/ghost")
+		_, err := runGet(t, "/gh/entirehq/ghost")
 		require.Error(t, err)
 		require.ErrorContains(t, err, "no repo matching")
 	})
 }
 
-func TestIsOwnerRepoRef(t *testing.T) {
+// TestMirrorRefOwner pins the owner extraction the --owner filter uses, now
+// that a directory row carries the forge-qualified name.
+func TestMirrorRefOwner(t *testing.T) {
 	t.Parallel()
-	tests := []struct {
-		ref  string
-		want bool
-	}{
-		{ref: "acme/web", want: true},
-		{ref: "entire://host/gh/acme/web"},  // clone URL, not this form
-		{ref: "acme/web/extra"},             // too many segments
-		{ref: "/web"},                       // empty owner
-		{ref: "acme/"},                      // empty repo
-		{ref: "0123456789ABCDEFGHJKMNPQRS"}, // no separator (ULID shape)
-	}
-	for _, tt := range tests {
-		t.Run(tt.ref, func(t *testing.T) {
-			t.Parallel()
-			require.Equal(t, tt.want, isOwnerRepoRef(tt.ref))
-		})
-	}
+	require.Equal(t, "acme", mirrorRefOwner("/gh/acme/web"))
+	require.Equal(t, "acme", mirrorRefOwner(mirrorRepoRef("acme/web")))
+	require.Empty(t, mirrorRefOwner(""))
 }
 
 func TestMirrorRow(t *testing.T) {
@@ -1528,11 +1516,11 @@ func TestBuildRepoDir(t *testing.T) {
 			candidateEntry("alice/x", "private", coreapi.RepoCandidateAccessRead, false),
 		}, hosts)
 		require.Equal(t, []repoDirRow{
-			{Repo: "acme/web", Private: true, Status: "ready", Placements: []repoDirPlacement{
+			{Repo: "/gh/acme/web", Private: true, Status: "ready", Placements: []repoDirPlacement{
 				{Cluster: "us", Status: "ready", CloneURL: "entire://aws-us-east-2.entire.io/gh/acme/web"},
 			}},
-			{Repo: "acme/mkt", Private: false, Status: "available", Access: "admin"},
-			{Repo: "alice/x", Private: true, Status: "owner-only", Access: "read"},
+			{Repo: "/gh/acme/mkt", Private: false, Status: "available", Access: "admin"},
+			{Repo: "/gh/alice/x", Private: true, Status: "owner-only", Access: "read"},
 		}, rows)
 	})
 
@@ -1582,7 +1570,7 @@ func TestBuildRepoDir(t *testing.T) {
 			onboardedEntry("acme/web", "public", "us"),
 		}, hosts)
 		require.Equal(t, []repoDirRow{
-			{Repo: "acme/web", Private: false, Status: "ready", Placements: []repoDirPlacement{
+			{Repo: "/gh/acme/web", Private: false, Status: "ready", Placements: []repoDirPlacement{
 				{Cluster: "us", Status: "ready", CloneURL: "entire://aws-us-east-2.entire.io/gh/acme/web"},
 			}},
 		}, rows, "only the mirror row survives; the native repo is dropped")
@@ -1597,7 +1585,7 @@ func TestBuildRepoDir(t *testing.T) {
 			}},
 		}, hosts)
 		require.Equal(t, []repoDirRow{
-			{Repo: "acme/web", Private: false, Status: "ready", Placements: []repoDirPlacement{
+			{Repo: "/gh/acme/web", Private: false, Status: "ready", Placements: []repoDirPlacement{
 				{Cluster: "us", Status: "ready", CloneURL: "entire://aws-us-east-2.entire.io/gh/acme/web"},
 			}},
 		}, rows)
@@ -1915,7 +1903,7 @@ func TestRepoMirrorList_PageMode(t *testing.T) {
 		}
 		require.NoError(t, json.Unmarshal([]byte(stdout), &envelope))
 		require.Len(t, envelope.Items, 1, "the client-side --status filter applies to the fetched page")
-		require.Equal(t, "acme/marketing", envelope.Items[0].Repo)
+		require.Equal(t, "/gh/acme/marketing", envelope.Items[0].Repo)
 		require.Equal(t, "p2", envelope.NextPageToken, "the cursor survives local filtering")
 	})
 
@@ -2151,17 +2139,17 @@ func TestRepoAccessList_NativeRefNamesTheGrantCommand(t *testing.T) {
 	require.ErrorContains(t, err, "entire repo grant list")
 }
 
-// TestRepoMirrorGet_TakesTheForgeQualifiedRef pins that `mirror get` accepts
-// the /gh/<owner>/<repo> form its sibling verbs take. It used to reject it:
-// isOwnerRepoRef cuts on the first slash, so a leading "/" left an empty owner
-// and the ref fell through to the entire:// clone-URL parser.
+// TestRepoMirrorGet_NamesARepoOneWay pins the subtree's single grammar: a repo
+// is named /gh/<owner>/<repo> and nothing else. The bare pair used to be
+// accepted here and rejected by every sibling verb, and the qualified form was
+// rejected here and accepted by every sibling.
 //
 // Not parallel: swaps the package-level activeCoreClient seam.
-func TestRepoMirrorGet_TakesTheForgeQualifiedRef(t *testing.T) {
-	var queried []string
+func TestRepoMirrorGet_NamesARepoOneWay(t *testing.T) {
+	var filters []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		queried = append(queried, r.URL.Query().Get("name"))
-		writeJSONResponse(t, w, http.StatusOK, &coreapi.ListMirrorsOutputBody{})
+		filters = append(filters, r.URL.Query().Get("filter"))
+		writeJSONResponse(t, w, http.StatusOK, &coreapi.ListReposOutputBody{})
 	}))
 	t.Cleanup(srv.Close)
 	prev := activeCoreClient
@@ -2171,6 +2159,7 @@ func TestRepoMirrorGet_TakesTheForgeQualifiedRef(t *testing.T) {
 	t.Cleanup(func() { activeCoreClient = prev })
 
 	run := func(ref string) error {
+		filters = nil
 		cmd := newRepoMirrorGetCmd()
 		var out bytes.Buffer
 		cmd.SetOut(&out)
@@ -2179,15 +2168,23 @@ func TestRepoMirrorGet_TakesTheForgeQualifiedRef(t *testing.T) {
 		return cmd.ExecuteContext(t.Context())
 	}
 
-	// Both spellings reach the same by-name lookup rather than the clone-URL
-	// parser, so neither reports "is not an entire:// clone URL".
-	for _, ref := range []string{"/gh/octocat/hello-world", "octocat/hello-world"} {
-		err := run(ref)
-		require.Error(t, err, "no such repo on this fake server")
-		require.NotContains(t, err.Error(), "is not an entire:// clone URL", "ref %q", ref)
-	}
+	t.Run("the qualified form reaches the by-name lookup", func(t *testing.T) {
+		err := run("/gh/octocat/hello-world")
+		require.ErrorContains(t, err, "no repo matching", "the fake server holds nothing")
+		// The server filter is the bare pair; the forge is the CLI's grammar.
+		require.Equal(t, []string{"octocat/hello-world"}, filters)
+	})
 
-	// A native ref gets the subtree's own refusal, not the clone-URL parser's.
-	err := run("/et/my-project/my-repo")
-	require.ErrorContains(t, err, "does not support Entire repository")
+	t.Run("a bare pair is refused and offered the forge", func(t *testing.T) {
+		err := run("octocat/hello-world")
+		require.ErrorContains(t, err, "must name its forge")
+		require.ErrorContains(t, err, "/gh/octocat/hello-world")
+		require.Empty(t, filters, "it must not reach the control plane")
+	})
+
+	t.Run("a native ref gets the subtree's own refusal", func(t *testing.T) {
+		err := run("/et/my-project/my-repo")
+		require.ErrorContains(t, err, "does not support Entire repository")
+		require.Empty(t, filters)
+	})
 }
