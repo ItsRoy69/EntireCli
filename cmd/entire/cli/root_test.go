@@ -240,30 +240,6 @@ func TestSearchIsVisibleAtTopLevelAndUnderCheckpoint(t *testing.T) {
 	}
 }
 
-func TestCheckpointPolicyCommandIsExperimental(t *testing.T) {
-	t.Parallel()
-
-	root := NewRootCmd()
-
-	checkpointPolicy, remaining, err := root.Find([]string{"checkpoint", "policy"})
-	if err != nil {
-		t.Fatalf("find checkpoint policy command: %v", err)
-	}
-	if len(remaining) != 0 || checkpointPolicy.Use != "policy" {
-		t.Fatalf("checkpoint policy resolved to %q with remaining args %v", checkpointPolicy.Use, remaining)
-	}
-	// Gated as experimental: visible and grouped in developer builds
-	// (the default test build), hidden in shipped releases.
-	if checkpointPolicy.GroupID != experimental.GroupID {
-		t.Fatalf("checkpoint policy GroupID = %q, want %q (experimental)", checkpointPolicy.GroupID, experimental.GroupID)
-	}
-
-	topLevelPolicy, remaining, err := root.Find([]string{"policy"})
-	if err == nil && len(remaining) == 0 && topLevelPolicy.Use == "policy" {
-		t.Fatal("top-level policy command should not remain after moving policy under checkpoint")
-	}
-}
-
 func TestRoot_VisibleCommandsAreGrouped(t *testing.T) {
 	t.Parallel()
 

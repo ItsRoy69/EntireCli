@@ -191,9 +191,6 @@ func main() {
 		cancel()
 		os.Exit(1)
 	}
-	if cli.ShouldCheckCheckpointPolicyWarning(executed) {
-		cli.WarnCheckpointPolicyIfNeeded(ctx, rootCmd.ErrOrStderr(), versioninfo.Version)
-	}
 	cancel() // Cleanup on successful exit
 }
 

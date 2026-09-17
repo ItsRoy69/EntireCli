@@ -199,7 +199,7 @@ and the inferred one is the common path.
 Experimental commands (gated by the build-time visibility flag above — visible
 and grouped under "Experimental commands:" in developer/nightly builds, hidden
 in stable releases, always runnable): `tokens`, `import`, `review`,
-`investigate`, `blame`, `why`, `experts`, `runner`, and `checkpoint policy`.
+`investigate`, `blame`, `why`, `experts`, and `runner`.
 `tokens` is also advertised through `entire labs`.
 
 Top-level lifecycle and standalone commands: `enable`, `disable`, `status`,
