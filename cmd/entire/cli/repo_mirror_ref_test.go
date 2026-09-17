@@ -53,3 +53,35 @@ func TestMirrorCommands_NativeRepoUnsupported(t *testing.T) {
 		require.NotContains(t, err.Error(), "invalid")
 	})
 }
+
+// TestBareRefSuggestions_OnlyOffersRefsTheCallerAccepts pins the helper's
+// contract: a suggestion is never itself a ref that would fail on the next
+// line. `repo clone` serves both forges and names both; the mirror verbs are
+// GitHub-only and must name only that one.
+func TestBareRefSuggestions_OnlyOffersRefsTheCallerAccepts(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(t, []string{"/et/octocat/hello-world", "/gh/octocat/hello-world"},
+		bareRefSuggestions("octocat/hello-world"),
+		"naming no forge means every grammar, which is repo clone")
+	require.Equal(t, []string{"/gh/octocat/hello-world"},
+		bareRefSuggestions("octocat/hello-world", mirrorCloneForge))
+	require.Equal(t, []string{"/et/octocat/hello-world"},
+		bareRefSuggestions("octocat/hello-world", nativeCloneForge))
+
+	// The suggestion a GitHub-only verb prints must parse there, which is the
+	// property that was broken: /et/... was suggested and then refused.
+	for _, suggestion := range bareRefSuggestions("octocat/hello-world", mirrorCloneForge) {
+		_, _, err := parseGitHubMirrorRepoRef(suggestion)
+		require.NoErrorf(t, err, "suggested %q must be accepted by the same parser", suggestion)
+	}
+}
+
+// TestParseGitHubMirrorRepoRef_NativeRefIsRefused pins that a native ref is
+// refused by name, so callers can add their own pointer to the verb that does
+// serve Entire repositories.
+func TestParseGitHubMirrorRepoRef_NativeRefIsRefused(t *testing.T) {
+	t.Parallel()
+	_, _, err := parseGitHubMirrorRepoRef("/et/my-project/my-repo")
+	require.ErrorContains(t, err, "does not support Entire repository")
+}

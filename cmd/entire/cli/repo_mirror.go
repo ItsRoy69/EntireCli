@@ -994,7 +994,9 @@ func newRepoMirrorGetCmd() *cobra.Command {
 		Use:   "get <mirror>",
 		Short: "Show a repo's mirrors by owner/repo, or one mirror by ULID or clone URL",
 		Long: "Show a mirror, or every mirror of a repo. <mirror> is one of:\n\n" +
-			"  - <owner>/<repo>, as shown in the `mirror list` NAME column — shows the\n" +
+			"  - /gh/<owner>/<repo>, the forge-qualified form the other mirror verbs\n" +
+			"    take; a bare <owner>/<repo>, as shown in the `mirror list` NAME\n" +
+			"    column, is accepted too — both show the\n" +
 			"    repo (visibility, access) and its mirror on every cluster, with\n" +
 			"    per-cluster clone URL and status\n" +
 			"  - a mirror ULID\n" +
@@ -1005,7 +1007,7 @@ func newRepoMirrorGetCmd() *cobra.Command {
 			"resolves even when that cluster belongs to a federation other than the active\n" +
 			"auth context; an owner/repo or ULID is looked up on the active context's\n" +
 			"login server.",
-		Example: "  entire repo mirror get octocat/hello-world\n" +
+		Example: "  entire repo mirror get /gh/octocat/hello-world\n" +
 			"  entire repo mirror get 01KS6KFJR2XS6PZ188MVYE07AN\n" +
 			"  entire repo mirror get entire://aws-us-east-2.entire.io/gh/octocat/hello-world",
 		Args: cobra.ExactArgs(1),
@@ -1034,6 +1036,18 @@ func newRepoMirrorGetCmd() *cobra.Command {
 			// detail the list aggregates away (clone URL, per-cluster
 			// status). Like a ULID it carries no cluster coordinate, so it
 			// resolves on the active context's core.
+			// A forge-qualified ref is what every sibling verb takes, so it
+			// resolves here too: /gh/<owner>/<repo> is the same by-name
+			// lookup, and /et/... gets the subtree's own GitHub-only refusal
+			// rather than the clone-URL parser's puzzling one.
+			if declaresForge(ref, nativeCloneForge) || declaresForge(ref, mirrorCloneForge) {
+				owner, repo, ferr := parseGitHubMirrorRepoRef(ref)
+				if ferr != nil {
+					cmd.SilenceUsage = true
+					return ferr
+				}
+				return runRepoMirrorGetByName(cmd, owner+"/"+repo)
+			}
 			if isOwnerRepoRef(ref) {
 				return runRepoMirrorGetByName(cmd, ref)
 			}

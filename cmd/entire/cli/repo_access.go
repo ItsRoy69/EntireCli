@@ -66,6 +66,13 @@ func newRepoAccessListCmd() *cobra.Command {
 			owner, repo, err := parseGitHubMirrorRepoRef(args[0])
 			if err != nil {
 				cmd.SilenceUsage = true
+				// This verb's name says nothing about GitHub, so a native repo
+				// is a reasonable thing to ask it about. Native access is
+				// grants, so name the command that answers rather than
+				// stopping at "unsupported".
+				if declaresForge(args[0], nativeCloneForge) {
+					return fmt.Errorf("%w; for an Entire repository see `entire repo grant list %s`", err, args[0])
+				}
 				return err
 			}
 			clusterHost := cluster

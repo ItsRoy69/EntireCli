@@ -30,7 +30,9 @@ func parseGitHubMirrorRepoRef(ref string) (owner, repo string, err error) {
 	if owner, repo, err = parseHostedGitHubURL(ref); err == nil {
 		return owner, repo, nil
 	}
-	if suggestions := bareRefSuggestions(ref); len(suggestions) > 0 {
+	// GitHub-only, so only the mirror reading is offered: suggesting the
+	// native one would name a ref this same function refuses above.
+	if suggestions := bareRefSuggestions(ref, mirrorCloneForge); len(suggestions) > 0 {
 		return "", "", fmt.Errorf("invalid <repo>: repository reference must name its forge; did you mean %s?", strings.Join(suggestions, " or "))
 	}
 	return "", "", fmt.Errorf("invalid <repo>: expected a forge-qualified repository reference such as /gh/owner/repo or /et/project/repo, got %q", ref)

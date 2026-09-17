@@ -2135,3 +2135,59 @@ func TestRepoAccessList_ClusterFlag(t *testing.T) {
 		require.Empty(t, listed)
 	})
 }
+
+// TestRepoAccessList_NativeRefNamesTheGrantCommand pins that `repo access`,
+// whose name says nothing about GitHub, points a native ref at the verb that
+// answers it instead of stopping at "unsupported".
+func TestRepoAccessList_NativeRefNamesTheGrantCommand(t *testing.T) {
+	t.Parallel()
+	cmd := newRepoAccessListCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"/et/my-project/my-repo"})
+	err := cmd.ExecuteContext(t.Context())
+	require.ErrorContains(t, err, "does not support Entire repository")
+	require.ErrorContains(t, err, "entire repo grant list")
+}
+
+// TestRepoMirrorGet_TakesTheForgeQualifiedRef pins that `mirror get` accepts
+// the /gh/<owner>/<repo> form its sibling verbs take. It used to reject it:
+// isOwnerRepoRef cuts on the first slash, so a leading "/" left an empty owner
+// and the ref fell through to the entire:// clone-URL parser.
+//
+// Not parallel: swaps the package-level activeCoreClient seam.
+func TestRepoMirrorGet_TakesTheForgeQualifiedRef(t *testing.T) {
+	var queried []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		queried = append(queried, r.URL.Query().Get("name"))
+		writeJSONResponse(t, w, http.StatusOK, &coreapi.ListMirrorsOutputBody{})
+	}))
+	t.Cleanup(srv.Close)
+	prev := activeCoreClient
+	activeCoreClient = func(context.Context) (*coreapi.Client, error) {
+		return coreapi.NewWithBearer(srv.URL, "tok")
+	}
+	t.Cleanup(func() { activeCoreClient = prev })
+
+	run := func(ref string) error {
+		cmd := newRepoMirrorGetCmd()
+		var out bytes.Buffer
+		cmd.SetOut(&out)
+		cmd.SetErr(&out)
+		cmd.SetArgs([]string{ref})
+		return cmd.ExecuteContext(t.Context())
+	}
+
+	// Both spellings reach the same by-name lookup rather than the clone-URL
+	// parser, so neither reports "is not an entire:// clone URL".
+	for _, ref := range []string{"/gh/octocat/hello-world", "octocat/hello-world"} {
+		err := run(ref)
+		require.Error(t, err, "no such repo on this fake server")
+		require.NotContains(t, err.Error(), "is not an entire:// clone URL", "ref %q", ref)
+	}
+
+	// A native ref gets the subtree's own refusal, not the clone-URL parser's.
+	err := run("/et/my-project/my-repo")
+	require.ErrorContains(t, err, "does not support Entire repository")
+}
