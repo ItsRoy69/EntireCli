@@ -192,7 +192,7 @@ A mixed fleet works, with one limitation:
 - A **modern** CLI (or the server) on git-refs primary reads everything: ULID/refs checkpoints directly, and older hex/`v1` checkpoints via the fallback.
 - An **old** CLI keeps writing hex checkpoints to the `v1` branch, and everyone modern still reads those. Reading ULID/refs checkpoints requires a CLI with git-refs support; an old CLI does not see them.
 
-This is why running `git-branch` as a *mirror* of git-refs is **not** part of the migration: it would dual-write every checkpoint into both backends to keep `v1` populated, but no reader needs that — read routing already covers both formats, and the "old client can't read the new format" case is a feature, not something to paper over.
+This is why running `git-branch` as a *mirror* of git-refs is **not** part of the migration: it would dual-write every checkpoint into both backends to keep `v1` populated, but no reader needs that — read routing already covers both formats, and an old client not reading the new format is an accepted consequence rather than something to paper over. It is now a **silent** one: the `checkpoint_min_version` policy that used to turn it into an explicit "upgrade" nudge was removed with the checkpoint policy feature, and nothing replaced it. An old CLI in a refs-primary repo sees a partial history and is told nothing.
 
 When checkpoints *are* actively migrated from the branch into refs (a path that is tooling-only today, not an official flow), they are written under `RefName(hexID)` — i.e. **hex-named refs** — which is why a hex ID under a git-refs primary is looked up in refs first and only then falls back to the branch.
 
