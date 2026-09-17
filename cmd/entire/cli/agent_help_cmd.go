@@ -100,7 +100,7 @@ var agentHelpClassification = map[string]agentHelpFacts{
 	"why":    {agentHelpAudienceReadOnly, true},
 	"search": {agentHelpAudienceReadOnly, true},
 
-	"checkpoint":         {agentHelpAudienceTaskDriven, true},
+	"checkpoint":         {agentHelpAudienceReadOnly, true},
 	"checkpoint explain": {agentHelpAudienceReadOnly, false},
 	"checkpoint list":    {agentHelpAudienceReadOnly, false},
 	"checkpoint search":  {agentHelpAudienceReadOnly, false},
