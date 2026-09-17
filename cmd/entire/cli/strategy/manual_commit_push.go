@@ -121,8 +121,6 @@ func (s *ManualCommitStrategy) prePush(ctx context.Context, remote string, prote
 	// default. Defer publication until the user's own branch exists there.
 	deferAutomaticCheckpointPush := protectFirstUserBranch && deferCheckpointPushOnEmptyRemote(ctx, ps)
 
-	refs := checkpoint.ResolveRefs(ctx)
-
 	// OPF pre-push rewrite: if OPF is configured, resolve the user's
 	// decision (env > settings > prompt > non-TTY auto-run), then
 	// re-redact unpushed v1 commits with OPF (producing the OPF-applied,
@@ -185,6 +183,7 @@ func (s *ManualCommitStrategy) prePush(ctx context.Context, remote string, prote
 	// from pushRefIfNeeded's delivered return and NOT from err, which is
 	// fail-soft and nil even when the remote refused the ref.
 	deliveredCount, anyFailed := 0, false
+	refs := checkpoint.ResolveRefs(ctx)
 	for _, ref := range refs.Push {
 		delivered, err := pushRefIfNeeded(pushCtx, ps.pushTarget(), ref)
 		if err != nil {

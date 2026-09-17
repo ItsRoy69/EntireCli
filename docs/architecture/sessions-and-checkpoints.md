@@ -517,11 +517,12 @@ Metadata-branch fetches refresh every candidate's tracking ref because branch
 existence alone does not prove that branch contains the requested checkpoint;
 they succeed when any candidate fetch succeeds.
 Other reads try candidates in order, advancing on missing data or transport
-failure and surfacing the first candidate's error when all fail. Local-ref advancement stays
-**elected-remote-only** — `EnsurePrimaryRef`, the metadata-fetch advance step,
-and `promoteRemoteTrackingPrimary` never act on the legacy tier, keyed on the
-explicit election result rather than the chain's first entry (a stale origin feeding `SafelyAdvanceLocalRef`
-would replay local v1 onto stale history — the issue-#1374 hazard). Legacy
+failure and surfacing the first candidate's error when all fail. Local-ref
+advancement stays **elected-remote-only** — `EnsurePrimaryRef`, the
+metadata-fetch advance step, and `promoteRemoteTrackingPrimary` never act on
+the legacy tier, keyed on the explicit election result rather than the chain's
+first entry (a stale origin feeding `SafelyAdvanceLocalRef` would replay local
+v1 onto stale history — the issue-#1374 hazard). Legacy
 data on origin is therefore served through origin's *tracking ref* (resume's
 final metadata tier and the store's tracking-ref fallback), never by moving
 local refs. A repository with no remotes keeps its "checkpoint absent"

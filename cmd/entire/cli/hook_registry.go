@@ -167,8 +167,6 @@ func executeAgentHook(cmd *cobra.Command, agentName types.AgentName, hookName st
 		return fmt.Errorf("failed to parse hook event: %w", parseErr)
 	}
 
-	claudePostTodoCheckpointHook := event == nil && agentName == agent.AgentNameClaudeCode && hookName == claudecode.HookNamePostTodo
-
 	if event != nil {
 		// Cross-agent guard: when Cursor IDE invokes a hook configured under
 		// .claude/settings.json (because .cursor/hooks.json is missing), the
@@ -182,12 +180,9 @@ func executeAgentHook(cmd *cobra.Command, agentName types.AgentName, hookName st
 			)
 			return nil
 		}
-	}
-
-	if event != nil {
 		// Lifecycle event — use the generic dispatcher
 		hookErr = DispatchLifecycleEvent(ctx, ag, event)
-	} else if claudePostTodoCheckpointHook {
+	} else if agentName == agent.AgentNameClaudeCode && hookName == claudecode.HookNamePostTodo {
 		// PostTodo is Claude-specific: creates incremental checkpoints during subagent execution
 		hookErr = handleClaudeCodePostTodo(ctx)
 	}

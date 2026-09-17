@@ -40,10 +40,6 @@ var sharedObjectCache = cache.NewObjectLRUDefault()
 //   - git refuses a repository whose ownership fails its safe.directory check,
 //     and refuses a .git it cannot parse. go-git applies neither check, so the
 //     fallback opened repositories the user's own git declines to touch.
-//
-// Every caller writes through the repository it is handed, and all of them sit
-// behind the root pre-run, which already refuses to run when the worktree root
-// does not resolve — so this closes a trap rather than a live bug.
 func OpenCurrent(ctx context.Context) (*git.Repository, error) {
 	repoRoot, err := paths.WorktreeRoot(ctx)
 	if err != nil {

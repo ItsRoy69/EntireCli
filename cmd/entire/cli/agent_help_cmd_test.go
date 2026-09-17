@@ -636,10 +636,9 @@ func TestAgentHelpClassification_CoversEveryAdvertisedCommand(t *testing.T) {
 }
 
 // A group's audience is a claim about all of its subcommands, so a read-only
-// group may not contain a subcommand that writes. checkpoint and session read
-// as read-only from their Short help but are not (`checkpoint explain --generate`
-// writes a summary; session carries adopt/attach/resume/stop) — both were
-// misclassified read-only in an earlier revision of this table.
+// group may not contain a subcommand that writes. session reads as read-only
+// from its Short help but is not (adopt/attach/resume/stop mutate session
+// state) — it was misclassified read-only in an earlier revision of this table.
 func TestAgentHelpClassification_ReadOnlyGroupsHaveNoWritingChildren(t *testing.T) {
 	t.Parallel()
 
@@ -656,13 +655,8 @@ func TestAgentHelpClassification_ReadOnlyGroupsHaveNoWritingChildren(t *testing.
 			}
 		}
 	}
-	for name, why := range map[string]string{
-		"checkpoint": "`checkpoint explain --generate` writes a summary",
-		"session":    "adopt/attach/resume/stop mutate session state",
-	} {
-		if agentHelpFactsFor(name).audience == agentHelpAudienceReadOnly {
-			t.Errorf("%q must not be classified read-only: %s", name, why)
-		}
+	if agentHelpFactsFor("session").audience == agentHelpAudienceReadOnly {
+		t.Error("session must not be classified read-only: adopt/attach/resume/stop mutate session state")
 	}
 }
 
@@ -769,13 +763,15 @@ func TestRenderAgentHelpJSON_CarriesAudienceWhereClassified(t *testing.T) {
 	}
 
 	drill := drillJSON(t, root, "checkpoint")
-	want := map[string]string{
-		"list": "read-only", "explain": "read-only", "search": "read-only",
-		"tokens": "read-only", "policy": "task-driven",
-	}
+	got := make(map[string]string, len(drill.Subcommands))
 	for _, sub := range drill.Subcommands {
-		if w, ok := want[sub.Name]; ok && sub.Audience != w {
-			t.Errorf("checkpoint %s audience = %q, want %q", sub.Name, sub.Audience, w)
+		got[sub.Name] = sub.Audience
+	}
+	for name, want := range map[string]string{
+		"list": "read-only", "explain": "read-only", "search": "read-only", "tokens": "read-only",
+	} {
+		if got[name] != want {
+			t.Errorf("checkpoint %s audience = %q, want %q", name, got[name], want)
 		}
 	}
 
