@@ -586,7 +586,7 @@ func flushCheckpointRefsQueue(ctx context.Context, repo *git.Repository, ps push
 			}
 			if rejectionWarning == "" {
 				if reason := checkpointRefRejectionReason(err); reason != "" {
-					rejectionWarning = fmt.Sprintf("[entire] Warning: checkpoint ref %s remains queued: %s", ref, reason)
+					rejectionWarning = fmt.Sprintf("[entire] Warning: checkpoint ref %s remains queued (showing one rejection):\n%s", ref, reason)
 				}
 			}
 			if firstErr == nil {
@@ -597,8 +597,9 @@ func flushCheckpointRefsQueue(ctx context.Context, repo *git.Repository, ps push
 		pushed = append(pushed, ref)
 	}
 	stop(fmt.Sprintf(" pushed %d of %d", len(pushed), len(existing)))
-	// One actionable reason per flush, after the progress line. Do not print
-	// the batch error too, or diagnose speculative recovery as divergence.
+	// One actionable example per flush, after the progress line. Label it as
+	// such: other queued refs may have different causes (all are logged).
+	// Preserve Git's line breaks rather than printing the single-line log error.
 	if rejectionWarning != "" {
 		fmt.Fprintln(os.Stderr, rejectionWarning)
 	}
