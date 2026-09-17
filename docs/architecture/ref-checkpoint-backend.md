@@ -105,6 +105,14 @@ Rewrites are atomic (temp file + rename under the lock) so a concurrent reader n
 4. On success, **removes** the pushed refs from the queue and runs shadow-branch cleanup.
 5. On a batch failure (typically a non-fast-forward rejection), **falls back to per-ref recovery** (`pushCheckpointRefWithRecovery`) and removes from the queue only the refs that land.
 
+A failed recovery preserves the original push error as the primary cause, with
+its fetch/replay error wrapped alongside it; a missing remote ref after a blocked
+push is not diagnosed as divergence. Confirmed remote rejections surface one
+bounded, credential-redacted warning per flush naming a ref and Git's reason
+(including push-protection guidance). Plain non-fast-forward recovery stays quiet;
+SSH authentication failures retain their dedicated hint. Failures remain queued
+and **never fail the user's git push**.
+
 ### Non-force, fast-forward-only
 
 All checkpoint-ref pushes are **fast-forward-only — never a force push.** There is no server-side ref protection, so a force push risks silently clobbering a checkpoint written elsewhere. Per-checkpoint refs normally advance by fast-forward (append-only per-checkpoint history), so this is the common case.

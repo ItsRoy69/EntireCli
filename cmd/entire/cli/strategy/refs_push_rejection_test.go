@@ -1,0 +1,118 @@
+package strategy
+
+import (
+	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/entireio/cli/cmd/entire/cli/gitrepo"
+	"github.com/entireio/cli/cmd/entire/cli/paths"
+	"github.com/entireio/cli/cmd/entire/cli/testutil"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+const checkpointRejectReason = "push declined due to repository rule violations"
+const checkpointUnblockURL = "https://github.com/example/checkpoints/security/secret-scanning/unblock-secret/example"
+
+// Like remote.TestPushWithOptions_ErrorCarriesRemoteRejectionReason, use a real
+// bare remote's pre-receive hook, not a fake git executable.
+func installCheckpointRejectHook(t *testing.T, bareDir string, longOutput bool) {
+	t.Helper()
+	message := "GITHUB PUSH PROTECTION: Amazon AWS Access Key ID; path: 0/full.jsonl:85; " + checkpointUnblockURL + "\n"
+	if longOutput {
+		message += strings.Repeat("additional repository policy detail\n", 200)
+	}
+	message += checkpointRejectReason
+	hook := "#!/bin/sh\ncat >&2 <<'REASON'\n" + message + "\nREASON\nexit 1\n"
+	require.NoError(t, os.WriteFile(filepath.Join(bareDir, "hooks", "pre-receive"), []byte(hook), 0o755))
+}
+
+func TestPushCheckpointRefWithRecovery_PreservesRejection(t *testing.T) {
+	workDir, bareDir, refs := setupRepoWithCheckpointRefs(t)
+	t.Chdir(workDir) // CWD-based push/recovery; cannot run in parallel.
+	installCheckpointRejectHook(t, bareDir, false)
+
+	err := pushCheckpointRefWithRecovery(t.Context(), bareDir, refs[0])
+	require.ErrorContains(t, err, checkpointRejectReason)
+	require.ErrorContains(t, err, checkpointUnblockURL)
+	assert.NotContains(t, err.Error(), "sync diverged")
+	require.ErrorContains(t, err, "couldn't find remote ref")
+	var recoveryErr *checkpointRefRecoveryError
+	require.ErrorAs(t, err, &recoveryErr)
+	require.ErrorIs(t, err, recoveryErr.pushErr)
+	require.ErrorIs(t, err, recoveryErr.recoveryErr)
+	var exitErr *exec.ExitError
+	require.ErrorAs(t, err, &exitErr, "the original push error remains wrapped")
+	assertRefsAbsentFromRemote(t, bareDir, refs, "blocked refs must not land")
+}
+
+func TestPrePushCheckpointRefs_RejectionIsFailSoftAndVisibleOnce(t *testing.T) {
+	for _, longOutput := range []bool{false, true} {
+		name := "short"
+		if longOutput {
+			name = "elided"
+		}
+		t.Run(name, func(t *testing.T) {
+			workDir, bareDir, refs := setupRepoWithCheckpointRefs(t)
+			t.Chdir(workDir) // Also captures process-global stderr.
+			paths.ClearWorktreeRootCache()
+			t.Setenv("ENTIRE_CHECKPOINTS_PRIMARY", "git-refs")
+			testutil.RunGit(t, workDir, "remote", "add", "origin", bareDir)
+			installCheckpointRejectHook(t, bareDir, longOutput)
+			repo, err := gitrepo.OpenPath(workDir)
+			require.NoError(t, err)
+			defer repo.Close()
+			queue := enqueueRefs(t, repo, refs)
+
+			restore := captureStderr(t)
+			err = NewManualCommitStrategy().PrePushFromGitHook(t.Context(), "origin")
+			output := restore()
+			require.NoError(t, err, "checkpoint rejection must never block git push")
+			assert.Equal(t, 1, strings.Count(output, checkpointRejectReason), output)
+			assert.Contains(t, output, refs[0].String())
+			assert.Contains(t, output, "Amazon AWS Access Key ID")
+			assert.Contains(t, output, "0/full.jsonl:85")
+			assert.Contains(t, output, checkpointUnblockURL)
+			assert.NotContains(t, output, "sync diverged")
+			assert.NotContains(t, output, "couldn't find remote ref")
+			assert.Less(t, len([]rune(output)), 3000, "reuse the remote layer's output cap")
+			if longOutput {
+				assert.Contains(t, output, "[…]")
+			}
+			remaining, err := queue.Drain()
+			require.NoError(t, err)
+			assert.ElementsMatch(t, refs, remaining)
+			assertRefsAbsentFromRemote(t, bareDir, refs, "blocked refs must stay local")
+		})
+	}
+}
+
+func TestCheckpointRefRejectionReason_RedactsCredential(t *testing.T) {
+	t.Parallel()
+	// Synthetic token assembled here so the fixture itself is not a credential.
+	token := "ghp_" + strings.Repeat("Ab12Cd34", 5)
+	reason := checkpointRefRejectionReason(errors.New("[remote rejected] hook declined; token=" + token))
+	assert.Contains(t, reason, "hook declined")
+	assert.NotContains(t, reason, token)
+}
+
+func TestCheckpointRefRejectionReason_QuietWithoutRemoteRejection(t *testing.T) {
+	t.Parallel()
+	for _, detail := range []string{
+		"! [rejected] refs/entire/checkpoints/AA/X (non-fast-forward)",
+		"! [rejected] refs/entire/checkpoints/AA/X (fetch first)",
+		"fatal: unable to access remote: Could not resolve host",
+	} {
+		t.Run(detail, func(t *testing.T) {
+			t.Parallel()
+			assert.Empty(t, checkpointRefRejectionReason(errors.New(detail)))
+			assert.Empty(t, checkpointRefRejectionReason(&checkpointRefRecoveryError{
+				pushErr: errors.New(detail), recoveryErr: errors.New("fetch failed"),
+			}))
+		})
+	}
+}

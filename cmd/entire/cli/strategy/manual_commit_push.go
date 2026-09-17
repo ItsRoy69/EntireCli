@@ -576,12 +576,18 @@ func flushCheckpointRefsQueue(ctx context.Context, repo *git.Repository, ps push
 	stop = startProgressDots(os.Stderr)
 	pushed := make([]plumbing.ReferenceName, 0, len(existing))
 	var firstErr error
+	var rejectionWarning string
 	for _, ref := range existing {
 		if err := pushCheckpointRefWithRecovery(pushCtx, dest.target, ref); err != nil {
 			logging.Warn(ctx, "git-refs push: checkpoint ref push/sync failed; left queued, not overwritten",
 				slog.String("ref", ref.String()), slog.String("error", err.Error()))
 			if nonInteractiveSSHAuthFailure(pushCtx, err) {
 				printNonInteractiveSSHAuthHint()
+			}
+			if rejectionWarning == "" {
+				if reason := checkpointRefRejectionReason(err); reason != "" {
+					rejectionWarning = fmt.Sprintf("[entire] Warning: checkpoint ref %s remains queued: %s", ref, reason)
+				}
 			}
 			if firstErr == nil {
 				firstErr = err
@@ -591,6 +597,11 @@ func flushCheckpointRefsQueue(ctx context.Context, repo *git.Repository, ps push
 		pushed = append(pushed, ref)
 	}
 	stop(fmt.Sprintf(" pushed %d of %d", len(pushed), len(existing)))
+	// One actionable reason per flush, after the progress line. Do not print
+	// the batch error too, or diagnose speculative recovery as divergence.
+	if rejectionWarning != "" {
+		fmt.Fprintln(os.Stderr, rejectionWarning)
+	}
 	if err := queue.Remove(pushed); err != nil {
 		logging.Warn(ctx, "git-refs push: clear pushed refs from queue failed",
 			slog.String("error", err.Error()))
