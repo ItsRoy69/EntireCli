@@ -39,6 +39,10 @@ func TestNoDeprecatedCommandFormsInUserFacingStrings(t *testing.T) {
 		"entire repo mirror use",           // → entire repo remote use
 		"entire repo mirror collaborators", // → entire repo access
 		"entire repo visibility set",       // → entire repo edit --visibility
+		// The grant family moved under its nouns; the old spelling is gone.
+		"entire grant org",     // → entire org grant
+		"entire grant project", // → entire project grant
+		"entire grant repo",    // → entire repo grant
 	}
 
 	var offenders []string

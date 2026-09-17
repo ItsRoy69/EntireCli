@@ -101,14 +101,19 @@ the commands are always runnable in every build.
   catalog with one cluster per region the column would read yes on every
   row. The catalog carries no health, capacity or usage data — nothing
   server-side does — and hidden or decommissioned clusters never reach it.
-- `org`: control-plane organization management — `create`, `list`, `get`, `delete`
-- `project`: control-plane project management — `create`, `list`, `get`, `delete`
+- `org`: control-plane organization management — `create`, `list`, `get`, `delete`,
+  plus `grant` (`add`/`list`/`remove`): org membership for a `provider:handle`
+  grantee, roles owner/admin/member (default member)
+- `project`: control-plane project management — `create`, `list`, `get`, `delete`,
+  plus `grant` (`add`/`list`/`remove`): project access for a `provider:handle`
+  grantee, roles reader/writer/admin; `remove` also takes an account ULID
 - `repo`: control-plane repository lifecycle — `create`, `list --project`,
   `view`, `edit`, `delete`, `clone`, plus the `mirror`, `remote`, `access`,
-  `visibility` and `protection` subtrees. Verb names follow the GitHub CLI
-  where the job is the same (`view`, `edit --visibility`, `auth switch`), per
-  the unified-repo-commands proto. Git content operations (log, diff, …) are
-  intentionally out of scope.
+  `visibility`, `protection` and `grant` subtrees (`repo grant` mirrors
+  `project grant`, addressing the repo by its `/et/<project>/<repo>` path
+  only). Verb names follow the GitHub CLI where the job is the same (`view`,
+  `edit --visibility`, `auth switch`), per the unified-repo-commands proto.
+  Git content operations (log, diff, …) are intentionally out of scope.
   `protection` (`list`, `add [--server-side-merge-only]`, `remove`) edits a
   native repo's branch-protection rules through core's
   `/repos/{repoId}/branch-protection` resource: `add` and `remove` are one
@@ -150,8 +155,14 @@ the commands are always runnable in every build.
   either.
   The native `/et/<project>/<repo>` path is **not** clone-only: it is the
   `path` the API returns, and `resolveRepoRef` accepts it for every command
-  that takes a repo ref — `view`, `edit`, `delete`, the `visibility` and
-  `protection` subtrees, and `grant repo add`/`list`/`remove` (COR-1632). The other two
+  that takes a repo ref — `view`, `edit`, `delete`, and the `visibility` and
+  `protection` subtrees (COR-1632). `repo grant` takes that path and nothing
+  else — no `--project`, no bare name, no ULID — through `resolveRepoPath`,
+  which parses with `parseNativeCloneRef` and resolves both segments by name
+  only (a project or repo can be *named* like a ULID, so path segments never
+  touch the `looksLikeULID` passthrough; `resolveRepoPathRef` and
+  `resolveNativeRepo` still do, pending the removal of repo-ULID addressing).
+  The other two
   clone shapes are not: a `/gh/` mirror ref is refused there (the by-name
   lookup resolves a project and then a repo inside it, and a mirror is in no
   project — so a mirror is addressed by ULID), and an `entire://` URL is not
@@ -188,8 +199,9 @@ the commands are always runnable in every build.
   knowing — a `foo.git` created through the API or web UI *aliases* onto `foo`
   in `resolveRepoRef`, and the durable fix is a server-side rule in
   `normalizeName`, not this check.
-- `grant`: manage access grants and org membership — `org`, `project`, and `repo`
-  each support `add` / `list` / `remove`
+- The three `grant` subtrees (`org grant`, `project grant`, `repo grant`) are one
+  generic builder plus three target descriptions in `grant.go`; a new target is
+  a `grantTarget` value, not a fourth copy of the leaves.
 
 Forge tokens (`gh`, `et`) are the path segments of an `entire://` URL, and
 `gitremote.pathForges` owns the *set* — `IsForgePathToken` answers "is this a
@@ -229,7 +241,18 @@ themselves. `--to core` (default) hits the control plane; `--to cell` hits an
 entire-api cell. `--jurisdiction <slug>` (e.g. `us`, `eu`) targets a specific
 jurisdiction's cell instead of the caller's home cell and implies `--to cell`
 (cell routing + identity-token exchange live in `auth.NewEntireAPICellClient`
-via `auth.CellTarget`). `{owner}`/`{repo}`/`{repo_id}` in the path are filled
+via `auth.CellTarget`). **The cell path acts as the same login `--to core`
+does** — `ENTIRE_TOKEN` when set, else the selected context: with no
+`ENTIRE_API_BASE_URL`, the cell `apiUrl` is read from the cluster catalog of
+that login's core, so a staging login lands on a staging cell and a local-dev
+login on the cell its local core advertises (never on the core itself); only an
+explicit `ENTIRE_API_BASE_URL` switches to discovering a login against that
+named data host (`auth.resolveCellClientSubject` has the history, COR-1634). A
+`-j` slug the environment has no cell for fails naming the core consulted and
+the jurisdictions it does serve. `activity`/`recap` fall back from the cell to
+the data API only when `auth.DataAPIServesSelectedLogin` says both are in the
+same environment; otherwise the cell error is reported rather than production
+being asked about a staging login. `{owner}`/`{repo}`/`{repo_id}` in the path are filled
 from the current repo's origin remote. It is an escape hatch, so it is absent
 from `agent-help`'s curated listing but stays in `entire help` and agent-help's
 footer — an agent that needs raw access must find it rather than hand-roll curl
@@ -1908,7 +1931,7 @@ The manual-commit strategy (`manual_commit*.go`) does not modify the active bran
 - **Token usage scoping** - `SessionState.TokenUsage` is the session-wide total used by `entire status`; `SessionState.CheckpointTokenUsage` is the pending checkpoint delta since the last condensation. Checkpoint metadata must stay scoped to `CheckpointTranscriptStart` or the pending checkpoint delta. Cursor tokens come only from stop-hook payloads, while Copilot CLI can also backfill full-session totals from `session.shutdown`. Shadow-branch condensation's transcript recompute runs with `subagentsDir=""` and so drops `SubagentTokens`; `fillMissingSubagentTokensFrom` refills it from the already-rescoped `state.CheckpointTokenUsage`. A live mid-turn condensation when no shadow branch resolves instead reads the still-available subagent transcripts only when no checkpoint-scoped subagent total already exists, the agent supports that extraction, and a real subagent directory exists. It subtracts `SubagentTokensBaseline` for checkpoint metadata and keeps the cumulative snapshot on `state.TokenUsage` so the reset advances the next baseline; an empty delta stays nil. The scan is substantially more expensive for subagent-heavy sessions, so every gate is load-bearing. The store sums those scoped values across a checkpoint's sessions via `types.AddTokenUsage` (the single token-summing primitive — do not hand-roll another; a field-by-field copy is how the nested total came to be dropped in the first place).
 - Tracks session state in `.git/entire-sessions/` (shared across worktrees)
 - **Commit-to-session linking is identity-first** (`strategy/session_identity.go`): identity comes from `SessionState.Owner`, the `proclive.Identity` that `captureSessionOwner` already records on every turn start (first non-transient ancestor — proclive skips shells, `entire` itself, and the Go toolchain, so a human commit typed in the same terminal never matches). Commit hooks snapshot their own ancestry once (`proclive.CurrentAncestry`) and match every candidate against it in memory (`Ancestry.Depth`) — one hostname/boot-id/proc walk per commit, not one per session state — linking the commit to the session whose agent process is an ancestor — in any worktree (nearest ancestor wins, so a nested agent beats the outer agent that spawned it, and only a tie at equal depth falls to the latest interaction; host/boot/start-time guards defeat PID reuse and cross-machine matches; Windows cannot introspect and falls back to worktree matching). The identity match is UNIONED with the worktree-matched set, never a replacement: a commit condenses every session with pending content in its worktree. Any session matched outside its home worktree is guest-linked — whether identity-matched or selected by the pre-existing single-worktree fallback — and is condensed and linked without mutating worktree-coupled state (`BaseCommit`, shadow-branch realignment) from the foreign worktree (`isSessionHomeWorktree`). Worktree matching is always computed (it is the sole mechanism for commits with no agent ancestry): imported sessions never link, and multi-worktree ambiguity is filtered to recently-interacting sessions (15 min) before declining. This deliberately turns some former ambiguity declines into a best-candidate link; `recentSessionWindow` is a correctness tradeoff because a session in a long-running build or tool call can age out and leave the other recent worktree to win. The stderr hint naming `entire session adopt` fires only from the commit-linking path, and only when identity matching could not rescue the commit either. Under `go test`, `session.NewStateStore` and `NewStateStoreForWorktree` refuse to open outside the temp root so non-isolated tests fail loudly instead of leaking fixture sessions into a real repo.
-- **Reclaiming sessions whose agent vanished** - not every agent fires a session-end hook, and any agent can be killed before its hook runs, so a session can be left un-finalized forever. `SessionState.Owner` — the same fingerprint commit linking matches above — is captured at every turn start by `captureSessionOwner`, and `State.OwnerExited()` reports it gone via `proclive.Check`. `finalizeExitedSessions` sweeps those inside `entire status` (text and `--json`) and `entire doctor`, ending them exactly as a clean stop would. **`OwnerExited` deliberately covers IDLE as well as ACTIVE** — an agent that finishes its last turn and then quits leaves IDLE, so gating on ACTIVE alone missed the common case; only already-finalized sessions are excluded, per the shared `State.IsEnded()` predicate. Liveness is Unknown on Windows and for cross-host state, where behaviour degrades to the `StuckActiveThreshold` timeout. Because the sweep runs inside interactive commands, its eager condensing is capped by `sweepCondenseBudget` across the whole sweep: every candidate is always marked ENDED (a single atomic rename — that is what un-sticks it from `entire status`), while condensing runs only while the budget lasts, so a multi-day backlog drains over successive invocations instead of stalling one. Skipping a condense is the existing fail-open path — PostCommit retries, and `doctor` reports the session as "ended with uncondensed checkpoint data".
+- **Reclaiming sessions whose agent vanished** - not every agent fires a session-end hook, and any agent can be killed before its hook runs, so a session can be left un-finalized forever. `SessionState.Owner` — the same fingerprint commit linking matches above — is captured at every turn start by `captureSessionOwner`, and `State.OwnerExited()` reports it gone via `proclive.Check`. `finalizeExitedSessions` sweeps those inside `entire doctor` and `__sweep_sessions`, ending them exactly as a clean stop would. **Not `entire status`**: status is a read-only observer — it reads through `StateStore.ListReadOnly` and reports a dead-owner session as `exited` without finalizing it, because asking what is happening must not change what is happening. Status therefore shows such a session until doctor or the sweeper reaches it. **`OwnerExited` deliberately covers IDLE as well as ACTIVE** — an agent that finishes its last turn and then quits leaves IDLE, so gating on ACTIVE alone missed the common case; only already-finalized sessions are excluded, per the shared `State.IsEnded()` predicate. Liveness is Unknown on Windows and for cross-host state, where behaviour degrades to the `StuckActiveThreshold` timeout. Because the sweep runs inside interactive commands, its eager condensing is capped by `sweepCondenseBudget` across the whole sweep: every candidate is always marked ENDED (a single atomic rename — that is what stops `entire status` reporting it as live), while condensing runs only while the budget lasts, so a multi-day backlog drains over successive invocations instead of stalling one. Skipping a condense is the existing fail-open path — PostCommit retries, and `doctor` reports the session as "ended with uncondensed checkpoint data".
 - **Session-end hooks that run under a host deadline** - an agent whose session-end hook fires inside its own shutdown may be killed part-way through. Such agents declare `agent.SessionEndBudgeter` (Codex: 3s cap, process tree killed on expiry). The budget bounds **only** the eager condense in `endSessionNow`, so the cheap step that un-sticks the session is never the one given up on; it is set below the host cap with enough headroom for the shell wrapper and binary load, which happen before Entire's own clock starts. Unbounded is not the same as guaranteed, though: mark-ended runs under `MutateSessionState`, whose flock acquire blocks, so a concurrent condense holding the lock can push it past the cap and get the tree killed — the exited-owner sweep above is the backstop. The bound is best-effort (condensation doesn't poll ctx between stages), and being cut off costs duplication rather than data: an incomplete condense leaves `FullyCondensed` false and PostCommit retries, except in the window between the v1 checkpoint write and the state save, where the checkpoint is already committed and PostCommit mints a second one over the same transcript range.
 - **Shadow branch migration** - if user does stash/pull/rebase (HEAD changes without commit), shadow branch is automatically moved to new base commit
 - **Orphaned branch cleanup** - if a shadow branch exists without a corresponding session state file, it is automatically reset when a new session starts
