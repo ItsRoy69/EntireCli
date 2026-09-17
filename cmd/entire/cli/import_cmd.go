@@ -41,11 +41,8 @@ func newImportAgentCmd(imp agentimport.Importer) *cobra.Command {
 read-only checkpoints. Imported history is searchable and explainable, but
 read-only: imported sessions cannot be resumed.
 
-Import honors checkpoint policy before scanning transcripts. If the configured
-checkpoint_version or checkpoint_min_version is unsupported by this CLI, import
-fails even with --dry-run. Import also needs a commit to anchor imported
-sessions to, so it fails — again including --dry-run — in a repository with no
-resolvable commit.`, imp.AgentType()),
+Import needs a commit to anchor imported sessions to, so it fails — including
+with --dry-run — in a repository with no resolvable commit.`, imp.AgentType()),
 		Args: cobra.NoArgs,
 		RunE: func(c *cobra.Command, _ []string) error {
 			ctx := c.Context()
@@ -60,10 +57,6 @@ resolvable commit.`, imp.AgentType()),
 				return fmt.Errorf("open repository: %w", err)
 			}
 			defer repo.Close()
-
-			if err := ensureCheckpointPolicyAllowsCheckpointData(ctx, repo); err != nil {
-				return err
-			}
 
 			// Load repo/user-configured redaction (opt-in PII, custom_redactions,
 			// redactor packs) before any checkpoint write. Imported transcripts
