@@ -16,7 +16,7 @@ import (
 )
 
 const checkpointRejectReason = "push declined due to repository rule violations"
-const checkpointUnblockURL = "https://github.com/example/checkpoints/security/secret-scanning/unblock-secret/example"
+const checkpointUnblockURL = "https://github.com/example/checkpoints/security/secret-scanning/unblock-secret/2mQ8vR5xL9nT3bW7kP4sH6jY0cF1dZ"
 
 // Like remote.TestPushWithOptions_ErrorCarriesRemoteRejectionReason, use a real
 // bare remote's pre-receive hook, not a fake git executable.
@@ -40,14 +40,64 @@ func TestPushCheckpointRefWithRecovery_PreservesRejection(t *testing.T) {
 	require.ErrorContains(t, err, checkpointRejectReason)
 	require.ErrorContains(t, err, checkpointUnblockURL)
 	assert.NotContains(t, err.Error(), "sync diverged")
-	require.ErrorContains(t, err, "couldn't find remote ref")
+	assert.NotContains(t, err.Error(), "couldn't find remote ref", "confirmed rejection must skip recovery")
+	var exitErr *exec.ExitError
+	require.ErrorAs(t, err, &exitErr, "the original push error remains wrapped")
+	assertRefsAbsentFromRemote(t, bareDir, refs, "blocked refs must not land")
+}
+
+func TestPushCheckpointRefWithRecovery_PreservesUnknownFailure(t *testing.T) {
+	workDir, _, refs := setupRepoWithCheckpointRefs(t)
+	t.Chdir(workDir)
+
+	// Unknown failures still attempt recovery and must preserve both causes.
+	err := pushCheckpointRefWithRecovery(t.Context(), filepath.Join(t.TempDir(), "missing.git"), refs[0])
 	var recoveryErr *checkpointRefRecoveryError
 	require.ErrorAs(t, err, &recoveryErr)
 	require.ErrorIs(t, err, recoveryErr.pushErr)
 	require.ErrorIs(t, err, recoveryErr.recoveryErr)
-	var exitErr *exec.ExitError
-	require.ErrorAs(t, err, &exitErr, "the original push error remains wrapped")
-	assertRefsAbsentFromRemote(t, bareDir, refs, "blocked refs must not land")
+	require.ErrorContains(t, recoveryErr.pushErr, "git push")
+	require.ErrorContains(t, recoveryErr.recoveryErr, "fetch failed")
+	assert.NotContains(t, err.Error(), "sync diverged")
+}
+
+func TestPrePushCheckpointRefs_RejectionDoesNotRewriteExistingRef(t *testing.T) {
+	workDir, bareDir, refs := setupRepoWithCheckpointRefs(t)
+	t.Chdir(workDir)
+	paths.ClearWorktreeRootCache()
+	t.Setenv("ENTIRE_CHECKPOINTS_PRIMARY", "git-refs")
+	testutil.RunGit(t, workDir, "remote", "add", "origin", bareDir)
+	require.NoError(t, batchPushRefs(t.Context(), bareDir, refs[:1]))
+	remoteTip := remoteRefHash(t, bareDir, refs[0])
+
+	// Backfill a ref that already exists remotely. Pin the timestamp in the
+	// past so replay's time.Now() deterministically changes the commit hash.
+	t.Setenv("GIT_COMMITTER_DATE", "2000-01-01T00:00:00Z")
+	testutil.WriteFile(t, workDir, "backfill.txt", "updated checkpoint content")
+	testutil.GitAdd(t, workDir, "backfill.txt")
+	tree := strings.TrimSpace(testutil.RunGit(t, workDir, "write-tree"))
+	localTip := strings.TrimSpace(testutil.RunGit(t, workDir, "commit-tree", tree, "-p", "HEAD", "-m", "checkpoint backfill"))
+	testutil.RunGit(t, workDir, "update-ref", refs[0].String(), localTip)
+	installCheckpointRejectHook(t, bareDir, false)
+	repo, err := gitrepo.OpenPath(workDir)
+	require.NoError(t, err)
+	defer repo.Close()
+	queue := enqueueRefs(t, repo, refs[:1])
+
+	for range 2 {
+		restore := captureStderr(t)
+		err = NewManualCommitStrategy().PrePushFromGitHook(t.Context(), "origin")
+		output := restore()
+		require.NoError(t, err, "checkpoint rejection must not block the user's push")
+		assert.Contains(t, output, checkpointRejectReason)
+		localRef, refErr := repo.Reference(refs[0], true)
+		require.NoError(t, refErr)
+		assert.Equal(t, localTip, localRef.Hash().String(), "a remote policy rejection must not replay local commits")
+		assert.Equal(t, remoteTip, remoteRefHash(t, bareDir, refs[0]))
+		remaining, drainErr := queue.Drain()
+		require.NoError(t, drainErr)
+		assert.Equal(t, refs[:1], remaining, "blocked update must remain queued")
+	}
 }
 
 func TestPrePushCheckpointRefs_RejectionIsFailSoftAndVisibleOnce(t *testing.T) {

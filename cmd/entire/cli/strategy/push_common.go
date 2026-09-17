@@ -70,9 +70,10 @@ func batchPushRefs(ctx context.Context, target string, refs []plumbing.Reference
 }
 
 // pushCheckpointRefWithRecovery pushes a single checkpoint ref fast-forward-only;
-// on rejection — typically the ref diverged on the remote (the same checkpoint
-// re-written elsewhere) — it fetches the remote ref and replays the local-only
-// commits on top via fetchAndRebaseRefCommon, then retries. The retry is still
+// confirmed remote policy/hook rejections return immediately. Other failures —
+// typically the ref diverged on the remote (the same checkpoint re-written
+// elsewhere) — fetch the remote ref and replay the local-only commits on top via
+// fetchAndRebaseRefCommon, then retry. The retry is still
 // non-force: after the replay the local ref is a fast-forward over the remote, so
 // the remote commit is preserved as an ancestor rather than overwritten. The
 // cherry-pick is delta-based, so non-overlapping changes merge; a genuine overlap
@@ -88,6 +89,12 @@ func pushCheckpointRefWithRecovery(ctx context.Context, target string, ref plumb
 	pushErr := batchPushRefs(ctx, target, []plumbing.ReferenceName{ref})
 	if pushErr == nil {
 		return nil
+	}
+	if checkpointRefRejectionReason(pushErr) != "" {
+		// Fetch+replay cannot fix a remote policy/hook rejection. If the ref
+		// already exists remotely, replay would needlessly rewrite local
+		// commits (including their committer timestamps) on every push.
+		return pushErr
 	}
 	if err := fetchAndRebaseRefCommon(ctx, target, ref); err != nil {
 		// Recovery is speculative: a missing remote ref may mean the push was
