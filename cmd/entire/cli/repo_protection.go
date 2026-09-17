@@ -93,7 +93,7 @@ func newRepoProtectionCmd() *cobra.Command {
 	cmd.AddCommand(newRepoProtectionListCmd())
 	cmd.AddCommand(newRepoProtectionAddCmd())
 	cmd.AddCommand(newRepoProtectionRemoveCmd())
-	return cmd
+	return requireSubcommand(cmd)
 }
 
 func newRepoProtectionListCmd() *cobra.Command {

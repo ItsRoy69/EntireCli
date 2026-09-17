@@ -112,10 +112,8 @@ func newAuthCmd() *cobra.Command {
 		Use:   "auth",
 		Short: "Manage authentication",
 		Long:  "Authentication subcommands. Includes login, logout, status, and login-context management (contexts, switch).",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			return cmd.Help()
-		},
 	}
+	requireSubcommand(cmd)
 
 	cmd.AddCommand(newLoginCmd())
 	cmd.AddCommand(newLogoutCmd())

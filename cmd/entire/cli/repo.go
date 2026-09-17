@@ -37,7 +37,7 @@ func newRepoCmd() *cobra.Command {
 	cmd.AddCommand(newRepoVisibilityCmd())
 	cmd.AddCommand(newRepoProtectionCmd())
 	cmd.AddCommand(newRepoGrantCmd())
-	return cmd
+	return requireSubcommand(cmd)
 }
 
 // repoColumns is the human table/field view of a repo, shared by list and
@@ -438,7 +438,7 @@ func newRepoVisibilityCmd() *cobra.Command {
 		Short: "Show a repository's visibility",
 	}
 	cmd.AddCommand(newRepoVisibilityGetCmd())
-	return cmd
+	return requireSubcommand(cmd)
 }
 
 func newRepoVisibilityGetCmd() *cobra.Command {

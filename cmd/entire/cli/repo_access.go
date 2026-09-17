@@ -32,7 +32,7 @@ func newRepoAccessCmd() *cobra.Command {
 		Short: "Show who has access to a repository",
 	}
 	cmd.AddCommand(newRepoAccessListCmd())
-	return cmd
+	return requireSubcommand(cmd)
 }
 
 // newRepoAccessListCmd wires `repo access list`: a read-only view of who can

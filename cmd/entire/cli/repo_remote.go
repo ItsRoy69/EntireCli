@@ -407,7 +407,7 @@ func newRepoRemoteCmd() *cobra.Command {
 		Short: "Manage this clone's git remotes",
 	}
 	cmd.AddCommand(newRepoRemoteUseCmd())
-	return cmd
+	return requireSubcommand(cmd)
 }
 
 func newRepoRemoteUseCmd() *cobra.Command {

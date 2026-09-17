@@ -439,7 +439,7 @@ func newRepoMirrorCmd() *cobra.Command {
 	cmd.AddCommand(newRepoMirrorListCmd())
 	cmd.AddCommand(newRepoMirrorGetCmd())
 	cmd.AddCommand(newRepoMirrorRemoveCmd())
-	return cmd
+	return requireSubcommand(cmd)
 }
 
 func newRepoMirrorAddCmd() *cobra.Command {
