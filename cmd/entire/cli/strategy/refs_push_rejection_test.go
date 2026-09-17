@@ -91,13 +91,16 @@ func TestPrePushCheckpointRefs_RejectionIsFailSoftAndVisibleOnce(t *testing.T) {
 	}
 }
 
-func TestCheckpointRefRejectionReason_RedactsCredential(t *testing.T) {
+func TestCheckpointRefRejectionReason_PreservesRemoteDetail(t *testing.T) {
 	t.Parallel()
-	// Synthetic token assembled here so the fixture itself is not a credential.
+	// Synthetic token: even credential-shaped remote output must be preserved,
+	// just as it would be displayed by a manual git push.
 	token := "ghp_" + strings.Repeat("Ab12Cd34", 5)
-	reason := checkpointRefRejectionReason(errors.New("[remote rejected] hook declined; token=" + token))
-	assert.Contains(t, reason, "hook declined")
-	assert.NotContains(t, reason, token)
+	detail := "[remote rejected] hook declined; token=" + token
+	assert.Equal(t, detail, checkpointRefRejectionReason(errors.New(detail)))
+	assert.Equal(t, detail, checkpointRefRejectionReason(&checkpointRefRecoveryError{
+		pushErr: errors.New(detail), recoveryErr: errors.New("fetch failed"),
+	}))
 }
 
 func TestCheckpointRefRejectionReason_QuietWithoutRemoteRejection(t *testing.T) {

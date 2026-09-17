@@ -16,7 +16,6 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/settings"
 	"github.com/entireio/cli/perf"
-	"github.com/entireio/cli/redact"
 
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
@@ -125,9 +124,7 @@ func checkpointRefRejectionReason(err error) string {
 	}
 	detail := err.Error() // Already collapsed and elided by remote.PushWithOptions.
 	if strings.Contains(detail, "[remote rejected]") || isProtectedRefRejection(detail) {
-		// Remote hooks normally name secret types and paths, not values, but
-		// don't echo a credential if a custom hook includes one.
-		return redact.String(detail)
+		return detail
 	}
 	return ""
 }

@@ -108,8 +108,9 @@ Rewrites are atomic (temp file + rename under the lock) so a concurrent reader n
 A failed recovery preserves the original push error as the primary cause, with
 its fetch/replay error wrapped alongside it; a missing remote ref after a blocked
 push is not diagnosed as divergence. Confirmed remote rejections surface one
-bounded, credential-redacted warning per flush naming a ref and Git's reason
-(including push-protection guidance). Plain non-fast-forward recovery stays quiet;
+bounded warning per flush naming a ref and Git's reason
+(including push-protection guidance), without additional secret redaction of the
+remote's diagnostic output. Plain non-fast-forward recovery stays quiet;
 SSH authentication failures retain their dedicated hint. Failures remain queued
 and **never fail the user's git push**.
 
