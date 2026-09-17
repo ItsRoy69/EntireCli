@@ -165,7 +165,7 @@ func (f *File) Upsert(c *Context) {
 		return
 	}
 	for i, existing := range f.Contexts {
-		if existing.Name == c.Name {
+		if existing != nil && existing.Name == c.Name {
 			f.Contexts[i] = c
 			if f.CurrentContext == "" {
 				f.CurrentContext = c.Name
@@ -187,7 +187,7 @@ func (f *File) Delete(name string) {
 	if f == nil || name == "" {
 		return
 	}
-	idx := slices.IndexFunc(f.Contexts, func(c *Context) bool { return c.Name == name })
+	idx := slices.IndexFunc(f.Contexts, func(c *Context) bool { return c != nil && c.Name == name })
 	if idx >= 0 {
 		f.Contexts = slices.Delete(f.Contexts, idx, idx+1)
 	}

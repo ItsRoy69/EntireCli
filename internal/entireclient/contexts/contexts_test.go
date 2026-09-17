@@ -121,6 +121,26 @@ func TestUpsert_ReplacesByName(t *testing.T) {
 	}
 }
 
+// A File built in memory (not via Load) can hold nil entries. Upsert and
+// Delete must skip them rather than dereference them.
+func TestUpsertAndDelete_SkipNilEntries(t *testing.T) {
+	f := &contexts.File{
+		Contexts: []*contexts.Context{nil, {Name: "x", Handle: "old"}, nil},
+	}
+	f.Upsert(&contexts.Context{Name: "x", Handle: "new"})
+	if got := f.Find("x"); got == nil || got.Handle != "new" {
+		t.Fatalf("Find(x) = %+v, want replaced entry", got)
+	}
+	f.Upsert(&contexts.Context{Name: "y"})
+	if f.Find("y") == nil {
+		t.Fatal("Upsert did not append past nil entries")
+	}
+	f.Delete("x")
+	if f.Find("x") != nil {
+		t.Fatal("Delete left context behind")
+	}
+}
+
 func TestDelete_DropsContext(t *testing.T) {
 	f := &contexts.File{
 		CurrentContext: "stays",
