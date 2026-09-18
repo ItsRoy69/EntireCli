@@ -30,7 +30,10 @@ func TestConfirmationClearsPromptAfterAnswer(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = terminal.Close() })
-	t.Cleanup(func() { _ = input.Close() })
+	// input is never closed. bubbletea answers huh's RequestWindowSize with
+	// `go p.checkResize()` (tea.go:861), which reads input.Fd() and is not
+	// joined by Program.Run, so a Close on this *os.File races with it under
+	// -race. The reader below stops on the clear sequence instead of on EOF.
 	if err := pty.Setsize(terminal, &pty.Winsize{Rows: 24, Cols: 100}); err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +54,7 @@ func TestConfirmationClearsPromptAfterAnswer(t *testing.T) {
 					cancel()
 				}
 			}
-			if readErr != nil {
+			if readErr != nil || (answered && clearedFromFirstRow.MatchString(transcript.String())) {
 				output <- transcript.String()
 				return
 			}
@@ -61,12 +64,17 @@ func TestConfirmationClearsPromptAfterAnswer(t *testing.T) {
 	form := New(huh.NewGroup(huh.NewConfirm().Title(question).Value(&answer))).
 		WithProgramOptions(tea.WithEnvironment([]string{"TERM=xterm-256color"})).
 		WithAccessible(false).WithInput(input).WithOutput(input)
-	err = form.RunWithContext(ctx)
-	_ = input.Close() // End the reader after the final render has been flushed.
-	if err != nil {
+	if err := form.RunWithContext(ctx); err != nil {
 		t.Fatal(err)
 	}
-	transcript := <-output
+	var transcript string
+	select {
+	case transcript = <-output:
+	case <-ctx.Done():
+		// The clear sequence never came. Unblock the reader to see what did.
+		_ = terminal.Close()
+		transcript = <-output
+	}
 	// The form ends with the cursor on its help row, so erasing from there
 	// alone leaves the question and choices visible: the renderer has to move
 	// back up over the form first, then erase to the end of the display.
