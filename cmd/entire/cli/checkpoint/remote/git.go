@@ -448,6 +448,26 @@ func PushWithOptions(ctx context.Context, opts PushOptions) (PushResult, error) 
 	return PushResult{Output: string(output)}, nil
 }
 
+// PushError retains bounded Git diagnostics in two forms: a single-line Error
+// for logging and Output with the original line breaks for terminal display.
+// Both mask the push target's embedded credentials; neither scans remote text
+// for secrets, which would destroy actionable push-protection unblock URLs.
+type PushError struct {
+	cause  error
+	detail string
+	output string
+}
+
+func (e *PushError) Error() string {
+	return fmt.Sprintf("%v (%s)", e.cause, e.detail)
+}
+
+func (e *PushError) Unwrap() error { return e.cause }
+
+// Output returns Git's bounded diagnostics without error wrappers, preserving
+// line breaks and indentation. It is not the unbounded raw PushResult.Output.
+func (e *PushError) Output() string { return e.output }
+
 // formatGitPushError enriches a failed push with git's own output, so a caller
 // that logs only the error still learns why the remote said no.
 //
@@ -461,8 +481,9 @@ func PushWithOptions(ctx context.Context, opts PushOptions) (PushResult, error) 
 // stays queued forever, and the only way to see the cause was to reproduce the
 // push by hand.
 //
-// The output is collapsed to one line and capped so it stays usable as a log
-// attribute, and a URL-shaped target is redacted first because git echoes the
+// Error output is collapsed to one line and capped for log attributes; PushError
+// also retains capped multiline output for the terminal. A URL-shaped target is
+// redacted first in both forms because git echoes the
 // remote back into its messages and a URL may carry credentials (same reasoning
 // as formatGitCommandError and FetchBlobs).
 func formatGitPushError(ctx context.Context, err error, output []byte, remote string) error {
@@ -479,8 +500,11 @@ func formatGitPushError(ctx context.Context, err error, output []byte, remote st
 	if remote != "" {
 		detail = strings.ReplaceAll(detail, remote, RedactURLOrPath(remote))
 	}
-	detail = strings.Join(strings.Fields(detail), " ")
-	return fmt.Errorf("%w (%s)", err, elideMiddle(detail, maxPushErrorDetail))
+	return &PushError{
+		cause:  err,
+		detail: elideMiddle(strings.Join(strings.Fields(detail), " "), maxPushErrorDetail),
+		output: elideMiddle(detail, maxPushErrorDetail),
+	}
 }
 
 // elideMiddle shortens s to at most limit runes by dropping the middle, keeping
