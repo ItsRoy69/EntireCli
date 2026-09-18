@@ -398,14 +398,16 @@ func saveSettingsToTarget(ctx context.Context, s *EntireSettings, targetFile str
 }
 
 // parseCheckpointRemoteFlag parses a "provider:owner/repo" string into its components.
-// Supported providers: "github", "gitlab".
+// Supported providers: "github", "gitlab". The provider is normalized the same way
+// the resolver (remote.providerHost) reads it, so the flag cannot reject a spelling
+// the settings file would accept.
 func parseCheckpointRemoteFlag(value string) (provider, repo string, err error) {
 	parts := strings.SplitN(value, ":", 2)
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 		return "", "", fmt.Errorf("expected format provider:owner/repo (e.g., github:org/checkpoints-repo), got %q", value)
 	}
 
-	provider = parts[0]
+	provider = strings.ToLower(strings.TrimSpace(parts[0]))
 	repo = parts[1]
 
 	switch provider {

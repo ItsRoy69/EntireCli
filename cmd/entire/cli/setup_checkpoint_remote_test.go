@@ -573,6 +573,8 @@ func TestParseCheckpointRemoteFlag(t *testing.T) {
 		{name: "github", value: "github:org/checkpoints", wantProvider: "github", wantRepo: "org/checkpoints"},
 		{name: "gitlab", value: "gitlab:org/checkpoints", wantProvider: "gitlab", wantRepo: "org/checkpoints"},
 		{name: "gitlab nested group", value: "gitlab:group/subgroup/project", wantProvider: "gitlab", wantRepo: "group/subgroup/project"},
+		{name: "provider is case-insensitive and stored lowercase", value: "GitLab:org/repo", wantProvider: "gitlab", wantRepo: "org/repo"},
+		{name: "provider whitespace is trimmed", value: " github :org/repo", wantProvider: "github", wantRepo: "org/repo"},
 		{name: "unsupported provider", value: "bitbucket:org/repo", wantErr: `unsupported provider "bitbucket" (supported: github, gitlab)`},
 		{name: "missing colon", value: "org/repo", wantErr: "expected format provider:owner/repo"},
 		{name: "missing repo slash", value: "github:repo", wantErr: "repo must be in owner/name format"},
