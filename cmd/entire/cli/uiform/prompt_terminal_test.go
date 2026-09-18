@@ -30,10 +30,8 @@ func TestConfirmationClearsPromptAfterAnswer(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = terminal.Close() })
-	// input is never closed. bubbletea answers huh's RequestWindowSize with
-	// `go p.checkResize()` (tea.go:861), which reads input.Fd() and is not
-	// joined by Program.Run, so a Close on this *os.File races with it under
-	// -race. The reader below stops on the clear sequence instead of on EOF.
+	// input stays open: bubbletea's unjoined checkResize goroutine
+	// (tea.go:861) reads its Fd after Run returns, so Close races with it.
 	if err := pty.Setsize(terminal, &pty.Winsize{Rows: 24, Cols: 100}); err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +62,6 @@ func TestConfirmationClearsPromptAfterAnswer(t *testing.T) {
 	form := New(huh.NewGroup(huh.NewConfirm().Title(question).Value(&answer))).
 		WithProgramOptions(tea.WithEnvironment([]string{"TERM=xterm-256color"})).
 		WithAccessible(false).WithInput(input).WithOutput(input)
-	// drain unblocks a reader still waiting on the pty and returns what it saw.
 	drain := func() string {
 		_ = terminal.Close()
 		return <-output
@@ -76,7 +73,6 @@ func TestConfirmationClearsPromptAfterAnswer(t *testing.T) {
 	select {
 	case transcript = <-output:
 	case <-ctx.Done():
-		// The clear sequence never came; report what did.
 		transcript = drain()
 	}
 	// The form ends with the cursor on its help row, so erasing from there
