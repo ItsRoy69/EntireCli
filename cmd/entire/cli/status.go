@@ -1052,7 +1052,7 @@ type statusJSON struct {
 	CheckpointPushDisabled bool `json:"checkpoint_push_disabled,omitempty"`
 	// CheckpointSyncRemote is the elected checkpoint sync remote name, or the
 	// org/repo slug in dedicated checkpoint_remote mode. Deliberately not named
-	// checkpoint_remote, which is the existing GitHub-coupled setting.
+	// checkpoint_remote, which is the existing github/gitlab-coupled setting.
 	CheckpointSyncRemote       string `json:"checkpoint_sync_remote,omitempty"`
 	CheckpointSyncRemoteSource string `json:"checkpoint_sync_remote_source,omitempty"` // config|observed|default|sole|first|dedicated
 	CheckpointSyncError        string `json:"checkpoint_sync_error,omitempty"`         // fail-closed message
