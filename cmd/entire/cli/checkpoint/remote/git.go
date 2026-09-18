@@ -29,7 +29,9 @@ const stampConfigTimeout = 10 * time.Second
 // used to authenticate git push/fetch operations for checkpoint branches.
 // The token is injected as an HTTP Basic Authorization header per RFC 7617:
 // the credentials string "x-access-token:<token>" is base64-encoded and sent as
-// "Authorization: Basic <base64>". This matches GitHub's token auth for Git HTTPS.
+// "Authorization: Basic <base64>". GitHub accepts this as a token credential, and
+// GitLab ignores the Basic-auth username for Personal/Project Access Tokens, so
+// one header serves both checkpoint_remote providers.
 // SSH remotes ignore the token (with a warning).
 const CheckpointTokenEnvVar = "ENTIRE_CHECKPOINT_TOKEN"
 
@@ -736,8 +738,10 @@ func extractRemoteFromArgs(args []string) string {
 
 // appendCheckpointTokenEnv appends GIT_CONFIG_COUNT-based env vars to inject
 // an Authorization header into git HTTP requests. The token is sent as a Basic
-// credential with the format "x-access-token:<token>" (base64-encoded), which
-// is compatible with GitHub's token authentication.
+// credential with the format "x-access-token:<token>" (base64-encoded). GitHub
+// accepts this as a token credential; GitLab ignores the Basic-auth username for
+// Personal/Project Access Tokens, so one header serves both checkpoint_remote
+// providers.
 //
 // Existing GIT_CONFIG_KEY_*/GIT_CONFIG_VALUE_* entries are preserved; the new
 // http.extraHeader entry is appended at the next free index and

@@ -61,6 +61,12 @@ const (
 	checkpointProviderGitLab = "gitlab"
 )
 
+// checkpointRemoteFlagUsage is the shared --checkpoint-remote help text. Both
+// `enable` and `configure` register the flag, so it lives here rather than being
+// spelled twice, for the same reason as checkpointBackendFlagUsage.
+const checkpointRemoteFlagUsage = "Checkpoint remote in provider:owner/repo format; providers: " +
+	checkpointProviderGitHub + ", " + checkpointProviderGitLab + " (e.g., github:org/checkpoints-repo)"
+
 // externalAgentsAutoEnabledNotice is printed when picking an external summary
 // provider implicitly turns the external_agents setting on. It tells the user
 // that the change applies beyond summary generation, without exposing the
@@ -822,7 +828,7 @@ Examples:
   entire configure --telemetry=false              # Opt out of telemetry
   entire configure --absolute-git-hook-path       # Reinstall git hook with absolute path
   entire configure --force                        # Reinstall git hook
-  entire configure --checkpoint-remote github:org/checkpoints
+  entire configure --checkpoint-remote github:org/checkpoints   # or gitlab:org/checkpoints
   entire configure --checkpoint-backend refs      # Move a legacy repo to per-checkpoint git refs
   entire configure --summarize-provider claude-code
   entire configure --summarize-timeout-seconds 300   # 5m deadline for explain --generate`,
@@ -882,7 +888,7 @@ Examples:
 	cmd.Flags().BoolVar(&opts.UseProjectSettings, "project", false, "Write settings to .entire/settings.json even if it already exists")
 	cmd.Flags().BoolVarP(&opts.ForceHooks, flagForce, "f", false, "Reinstall the Entire git hook")
 	cmd.Flags().BoolVar(&opts.SkipPushSessions, flagSkipPushSessions, false, "Disable automatic pushing of session logs on git push")
-	cmd.Flags().StringVar(&opts.CheckpointRemote, flagCheckpointRemote, "", "Checkpoint remote in provider:owner/repo format (e.g., github:org/checkpoints-repo or gitlab:org/checkpoints-repo)")
+	cmd.Flags().StringVar(&opts.CheckpointRemote, flagCheckpointRemote, "", checkpointRemoteFlagUsage)
 	cmd.Flags().StringVar(&opts.CheckpointBackend, flagCheckpointBackend, "", checkpointBackendFlagUsage)
 	cmd.Flags().StringVar(&summarizeProvider, flagSummarizeAgent, "", "Set the provider used by explain --generate (e.g., claude-code, codex, gemini, pi, opencode, cursor, copilot-cli)")
 	cmd.Flags().StringVar(&summarizeModel, flagSummarizeModel, "", "Set the model hint used by explain --generate")
@@ -1050,7 +1056,7 @@ publish the repository yourself when you're ready.`,
 	cmd.Flags().StringVar(&agentName, agentFlagName, "", "Agent to set up hooks for (e.g., "+strings.Join(agent.StringList(), ", ")+"; external agents on $PATH are also available). Enables non-interactive mode.")
 	cmd.Flags().BoolVarP(&opts.ForceHooks, flagForce, "f", false, "Force reinstall hooks (removes existing Entire hooks first)")
 	cmd.Flags().BoolVar(&opts.SkipPushSessions, flagSkipPushSessions, false, "Disable automatic pushing of session logs on git push")
-	cmd.Flags().StringVar(&opts.CheckpointRemote, flagCheckpointRemote, "", "Checkpoint remote in provider:owner/repo format (e.g., github:org/checkpoints-repo or gitlab:org/checkpoints-repo)")
+	cmd.Flags().StringVar(&opts.CheckpointRemote, flagCheckpointRemote, "", checkpointRemoteFlagUsage)
 	cmd.Flags().StringVar(&opts.CheckpointBackend, flagCheckpointBackend, "", checkpointBackendFlagUsage)
 	cmd.Flags().BoolVar(&opts.Telemetry, flagTelemetry, true, "Enable anonymous usage analytics")
 	cmd.Flags().BoolVar(&opts.AbsoluteGitHookPath, flagAbsoluteGitHookPath, false, "Embed full binary path in git hooks (for GUI git clients that don't source shell profiles)")
