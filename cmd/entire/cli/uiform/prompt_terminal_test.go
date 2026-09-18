@@ -64,16 +64,20 @@ func TestConfirmationClearsPromptAfterAnswer(t *testing.T) {
 	form := New(huh.NewGroup(huh.NewConfirm().Title(question).Value(&answer))).
 		WithProgramOptions(tea.WithEnvironment([]string{"TERM=xterm-256color"})).
 		WithAccessible(false).WithInput(input).WithOutput(input)
+	// drain unblocks a reader still waiting on the pty and returns what it saw.
+	drain := func() string {
+		_ = terminal.Close()
+		return <-output
+	}
 	if err := form.RunWithContext(ctx); err != nil {
-		t.Fatal(err)
+		t.Fatalf("form: %v\ntranscript: %q", err, drain())
 	}
 	var transcript string
 	select {
 	case transcript = <-output:
 	case <-ctx.Done():
-		// The clear sequence never came. Unblock the reader to see what did.
-		_ = terminal.Close()
-		transcript = <-output
+		// The clear sequence never came; report what did.
+		transcript = drain()
 	}
 	// The form ends with the cursor on its help row, so erasing from there
 	// alone leaves the question and choices visible: the renderer has to move
